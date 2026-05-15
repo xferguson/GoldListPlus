@@ -1,0 +1,13 @@
+@import "tailwindcss";
+
+@theme {
+  --color-bronze: #b87333;
+  --color-silver: #c0c0c0;
+  --color-gold: #d4af37;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}

@@ -1,0 +1,28 @@
+node_modules
+dist
+dist-ssr
+*.local
+
+# IDE
+.vscode/*
+!.vscode/extensions.json
+.idea
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# Test
+coverage
+.nyc_output
+
+# Build
+.vite
+*.tsbuildinfo
+
+# Env
+.env
+.env.local
+.env.*.local

@@ -1,0 +1,85 @@
+# Gold List Plus — Working Notes for Claude
+
+## What this project is
+
+A Progressive Web App that implements the **Gold List Method** of language learning with **Anki-style flashcards used only as the testing mechanism** during distillation reviews. Static site, deploys to GitHub Pages, fully offline, no backend ever.
+
+Read first, in this order:
+1. [docs/PRD.md](docs/PRD.md) — what the product does and why. Includes a "sacred rules" section that overrides everything else.
+2. [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — stack, module map, layering rules, ADRs, dependency ledger.
+3. [docs/TASKS.md](docs/TASKS.md) — the work queue with explicit acceptance criteria per task.
+
+## Working methodology — five subagents (use them)
+
+Every meaningful piece of work flows through these subagents in order:
+
+1. **`product-designer`** — owns `docs/PRD.md`. Clarifies requirements, surfaces questions.
+2. **`tech-lead`** — owns `docs/ARCHITECTURE.md` and `docs/TASKS.md`. Translates PRD changes into ADRs and tasks with AC.
+3. **`qa-engineer`** — writes failing tests for a task's AC (Red phase). Confirms Red via `npm run test`.
+4. **`implementer`** — writes the minimum code to make the tests pass (Green phase). No scope creep.
+5. **`code-reviewer`** — review-only. Verifies against PRD + AC + ARCHITECTURE. Approves or kicks back.
+
+After Code Reviewer approves, the work returns through **QA → Tech Lead → Product Designer** for a final sanity check. Any agent may kick work back to a previous step with a written reason.
+
+Definitions live in [.claude/agents/](.claude/agents/). They auto-load at session start; you can dispatch via the Agent tool.
+
+The main thread's job is **orchestration**: dispatch the right subagent for the right phase, collect the artefact, advance. The main thread does NOT write production code, tests, or design docs directly — it routes the work.
+
+## Current state (last touched: TASK-002 complete)
+
+- [✓] TASK-001 — Vite + React + TS + Tailwind + tooling. `npm run dev/build/test/typecheck` all green.
+- [✓] TASK-002 — vite-plugin-pwa + HashRouter + `base: '/GoldListPlus/'` + placeholder icons.
+- [ ] **TASK-003 — Dexie schema + ID generator. NEXT.**
+- Tasks TASK-004 through TASK-022 are queued in `docs/TASKS.md`.
+
+TASK-001 and TASK-002 were completed directly by the main thread (before the subagent workflow was in effect) — they are pure config and bootstrap, no production logic. Starting with TASK-003, every task must go through the subagent flow.
+
+## How to pick up TASK-003
+
+1. Read `docs/TASKS.md` → TASK-003.
+2. Read `docs/ARCHITECTURE.md` §4 (data model + indexes line).
+3. Dispatch the `qa-engineer` subagent with a self-contained prompt that points it at the task ID and the AC. Tell it to write `src/db/db.test.ts` and `src/db/ids.test.ts`, run `npm run test`, and confirm Red.
+4. Once Red is confirmed, dispatch the `implementer` subagent to write `src/db/db.ts` and `src/db/ids.ts` to make the tests pass.
+5. Once Green, dispatch the `code-reviewer` subagent against the diff.
+6. If approved, run the second pass (QA → Tech Lead → Product Designer) and advance to TASK-004.
+
+## Sacred product rules (PRD §8 — never violate)
+
+1. **Distillation is manual rewriting.** No auto-built next list. The entry form does NOT pre-fill from parent Cards.
+2. **`wrong` rating is always flagged for distillation.** Hardcoded. No setting overrides this.
+3. **Gold tier is terminal.** Gold lists have `reviewableAt = null`, no Builder, no archiving on review.
+4. **One source of truth per fact.** Tier on Page; rating history in ReviewEvent. No duplicated derived state.
+5. **No backend, ever.**
+
+## Stack quick reference
+
+- Vite 6 + React 19 + TypeScript strict
+- Tailwind 4 via `@tailwindcss/vite`
+- Dexie 4 over IndexedDB (with `fake-indexeddb` in tests)
+- Zustand 5 for state
+- React Router 7 with **HashRouter** (GH Pages safe)
+- Recharts for stats
+- vite-plugin-pwa (Workbox) with `registerType: 'autoUpdate'`
+- vitest 3 + React Testing Library
+- ESLint flat config
+
+## Verification commands
+
+```
+npm run dev         # local dev server on :5173
+npm run build       # production build to dist/ (also runs tsc -b)
+npm run test        # vitest run, watch with test:watch
+npm run typecheck   # tsc -b --noEmit
+npm run lint        # eslint .
+```
+
+All four are currently green on `main` of the scaffold.
+
+## Things easy to forget
+
+- `base: '/GoldListPlus/'` in `vite.config.ts` must match the GH Pages repo name. Manifest `scope` and `start_url` must agree.
+- HashRouter not BrowserRouter. Don't "fix" it.
+- Card has no `notes` field. Archive is `archivedAt: number | undefined` — no boolean.
+- Tier is `'bronze' | 'silver' | 'gold'` string union, not numeric stage.
+- Pure logic in `src/lib/**` takes `now: number` as a parameter — no `Date.now()` calls in there.
+- Repos in `src/db/repos/` are the only callers of `src/db/db.ts`.
