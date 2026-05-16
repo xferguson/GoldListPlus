@@ -1,7 +1,33 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import type { Table } from 'dexie';
 import { ulid } from 'ulid';
 import { db } from './db';
-import type { Book, Page, Card, ReviewEvent } from './db';
+import type { Book, Page, Card, ReviewEvent, Tier } from './db';
+
+/**
+ * Proves a Dexie index actually filters rows (not merely that `.where()` resolves).
+ * Inserts two rows with distinct index values, queries for the matching one,
+ * and asserts exactly that row comes back.
+ *
+ * Works for both single-field indexes (value is a scalar) and compound indexes
+ * (value is a tuple) — Dexie's `where(name).equals(value)` accepts both shapes.
+ */
+async function assertIndexFilters<TRow extends { id: string }, TValue>(
+  table: Table<TRow, string>,
+  indexName: string,
+  matchingValue: TValue,
+  nonMatchingValue: TValue,
+  rowFactory: (value: TValue) => TRow,
+): Promise<void> {
+  const matching = rowFactory(matchingValue);
+  const nonMatching = rowFactory(nonMatchingValue);
+  await table.bulkPut([matching, nonMatching]);
+  const results = await table
+    .where(indexName)
+    .equals(matchingValue as never)
+    .toArray();
+  expect(results.map((r) => r.id)).toEqual([matching.id]);
+}
 
 // Each test runs against a fresh DB to avoid state leakage. The simplest way is
 // to close + delete the singleton DB between tests and let `db.open()` lazily
@@ -171,31 +197,181 @@ describe('db schema', () => {
     });
   });
 
-  it('TASK-003 AC-2: indexed query returns inserted rows by index value', async () => {
-    // Sanity check that an index actually filters, not just that .where() doesn't throw.
-    await db.open();
-    const bookId = ulid();
-    const otherBookId = ulid();
-    const matching: Page = {
-      id: ulid(),
-      bookId,
-      title: 'Bronze 1',
-      tier: 'bronze',
-      createdAt: 1,
-      reviewableAt: 100,
-      cardIds: [],
-    };
-    const nonMatching: Page = {
-      id: ulid(),
-      bookId: otherBookId,
-      title: 'Bronze 1',
-      tier: 'bronze',
-      createdAt: 1,
-      reviewableAt: 100,
-      cardIds: [],
-    };
-    await db.pages.bulkPut([matching, nonMatching]);
-    const results = await db.pages.where('bookId').equals(bookId).toArray();
-    expect(results).toEqual([matching]);
+  describe('TASK-003 AC-2 (filter): each declared index filters rows by value', () => {
+    it('pages.bookId filters by bookId', async () => {
+      await db.open();
+      const matchId = ulid();
+      const otherId = ulid();
+      await assertIndexFilters<Page, string>(
+        db.pages,
+        'bookId',
+        matchId,
+        otherId,
+        (bookId) => ({
+          id: ulid(),
+          bookId,
+          title: 'Bronze 1',
+          tier: 'bronze',
+          createdAt: 1,
+          reviewableAt: 100,
+          cardIds: [],
+        }),
+      );
+    });
+
+    it('pages.reviewableAt filters by reviewableAt', async () => {
+      await db.open();
+      await assertIndexFilters<Page, number>(
+        db.pages,
+        'reviewableAt',
+        100,
+        200,
+        (reviewableAt) => ({
+          id: ulid(),
+          bookId: ulid(),
+          title: 'Bronze 1',
+          tier: 'bronze',
+          createdAt: 1,
+          reviewableAt,
+          cardIds: [],
+        }),
+      );
+    });
+
+    it('pages.[bookId+tier] compound index filters by both fields', async () => {
+      await db.open();
+      const bookId = ulid();
+      // Differentiate on the tier component to prove the compound key is honoured,
+      // not just the leading bookId field.
+      await assertIndexFilters<Page, [string, Tier]>(
+        db.pages,
+        '[bookId+tier]',
+        [bookId, 'bronze'],
+        [bookId, 'silver'],
+        ([bId, tier]) => ({
+          id: ulid(),
+          bookId: bId,
+          title: 'A page',
+          tier,
+          createdAt: 1,
+          reviewableAt: 100,
+          cardIds: [],
+        }),
+      );
+    });
+
+    it('cards.pageId filters by pageId', async () => {
+      await db.open();
+      const matchId = ulid();
+      const otherId = ulid();
+      await assertIndexFilters<Card, string>(
+        db.cards,
+        'pageId',
+        matchId,
+        otherId,
+        (pageId) => ({
+          id: ulid(),
+          bookId: ulid(),
+          pageId,
+          source: 'hola',
+          target: 'hello',
+          createdAt: 1,
+        }),
+      );
+    });
+
+    it('cards.bookId filters by bookId', async () => {
+      await db.open();
+      const matchId = ulid();
+      const otherId = ulid();
+      await assertIndexFilters<Card, string>(
+        db.cards,
+        'bookId',
+        matchId,
+        otherId,
+        (bookId) => ({
+          id: ulid(),
+          bookId,
+          pageId: ulid(),
+          source: 'hola',
+          target: 'hello',
+          createdAt: 1,
+        }),
+      );
+    });
+
+    it('cards.archivedAt filters by archivedAt', async () => {
+      await db.open();
+      await assertIndexFilters<Card, number>(
+        db.cards,
+        'archivedAt',
+        1_700_000_000_000,
+        1_700_000_001_000,
+        (archivedAt) => ({
+          id: ulid(),
+          bookId: ulid(),
+          pageId: ulid(),
+          source: 'hola',
+          target: 'hello',
+          createdAt: 1,
+          archivedAt,
+        }),
+      );
+    });
+
+    it('reviews.cardId filters by cardId', async () => {
+      await db.open();
+      const matchId = ulid();
+      const otherId = ulid();
+      await assertIndexFilters<ReviewEvent, string>(
+        db.reviews,
+        'cardId',
+        matchId,
+        otherId,
+        (cardId) => ({
+          id: ulid(),
+          cardId,
+          pageId: ulid(),
+          rating: 'easy',
+          reviewedAt: 1_700_000_000_000,
+        }),
+      );
+    });
+
+    it('reviews.pageId filters by pageId', async () => {
+      await db.open();
+      const matchId = ulid();
+      const otherId = ulid();
+      await assertIndexFilters<ReviewEvent, string>(
+        db.reviews,
+        'pageId',
+        matchId,
+        otherId,
+        (pageId) => ({
+          id: ulid(),
+          cardId: ulid(),
+          pageId,
+          rating: 'easy',
+          reviewedAt: 1_700_000_000_000,
+        }),
+      );
+    });
+
+    it('reviews.reviewedAt filters by reviewedAt', async () => {
+      await db.open();
+      await assertIndexFilters<ReviewEvent, number>(
+        db.reviews,
+        'reviewedAt',
+        1_700_000_000_000,
+        1_700_000_001_000,
+        (reviewedAt) => ({
+          id: ulid(),
+          cardId: ulid(),
+          pageId: ulid(),
+          rating: 'easy',
+          reviewedAt,
+        }),
+      );
+    });
   });
 });
