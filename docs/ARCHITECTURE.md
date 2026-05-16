@@ -187,6 +187,29 @@ Notes:
 - All IDs are ULIDs (`src/db/ids.ts` wraps a tiny ULID generator).
 - All times are millisecond Unix epochs. No `Date` objects in data layer.
 
+### File-size limits
+
+One responsibility per file. The intent is readability, testability, and preventing god-modules that quietly accrete unrelated logic. Limits below are drawn from common conventions (Sonar/CodeClimate ~250–500 lines, React community ~200–300 for components, tighter caps for pure-logic and store modules where focus matters most). Targets are the soft expectation; hard caps are the kickback threshold.
+
+| Bucket | Target (lines) | Hard cap (lines) |
+|---|---|---|
+| `src/lib/**` (pure logic) | 150 | 200 |
+| `src/db/repos/*.ts` | 150 | 200 |
+| `src/db/db.ts`, `src/db/ids.ts` | 100 | 150 |
+| `src/components/*.tsx` | 200 | 300 |
+| `src/routes/**` | 250 | 350 |
+| `src/stores/*.ts` | 100 | 150 |
+| `*.test.ts` / `*.test.tsx` | 400 | 600 |
+| Config (`vite.config.ts`, `tsconfig*.json`, `eslint.config.js`, `vitest.setup.ts`) | — | — (uncapped) |
+| Docs (`docs/*.md`, `README.md`, `CLAUDE.md`) | — | — (uncapped; use H2/H3 sectioning) |
+| Generated (`package-lock.json`, `public/icons/*`) | — | — (uncapped) |
+
+Line counts include code and comments but exclude trailing blank lines.
+
+- **Exceeding the hard cap:** the preferred response is to split the file by responsibility (extract a helper module, a sub-component, or a focused repo function). Do **not** relax the cap as a first move.
+- **Documented exception:** if splitting genuinely does not make sense (e.g. a single cohesive state machine that loses clarity when split), add a one-line `// rationale-for-size: <reason>` comment at the top of the file **and** record the exception in the relevant task in `TASKS.md`. Exceptions are visible by design.
+- **Enforcement:** these limits are a review rule, not a CI gate. The code-reviewer checks on first pass; the tech-lead audits the full diff against this table on the second pass and kicks back violations.
+
 ## 7. PWA configuration constraints
 
 - `vite.config.ts` `base: '/GoldListPlus/'` (matches GH Pages repo name).

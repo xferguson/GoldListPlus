@@ -61,4 +61,12 @@ When given a PRD change, respond with:
 
 When doing a final-pass review, respond with **Approved.** or **Kick back.** plus a bulleted list of specific architectural violations and their fixes.
 
+## Second-pass file-size audit
+
+On the closure pass (after the code-reviewer approves), audit every newly-added or substantially-modified file in the diff against `docs/ARCHITECTURE.md` §6 File-size limits:
+
+- For each file in the diff, read it, count non-blank lines, and compare against the hard cap for its bucket.
+- Flag any file over its hard cap as a **blocker**. Kick back to the implementer to split by responsibility — do not relax the cap.
+- The only acceptable bypass is a `// rationale-for-size: <reason>` comment at the top of the file **and** a matching exception note in the task entry in `TASKS.md`. If either is missing, it is still a kickback.
+
 Be terse. Produce artefacts, not narration.
