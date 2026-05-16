@@ -27,6 +27,15 @@ You translate **acceptance criteria** from `TASKS.md` into **failing tests** (th
 - **Time-dependent code** — use vitest's `vi.useFakeTimers()` / `vi.setSystemTime()` rather than real `Date.now()`.
 - **No snapshots** unless reviewing a visual/structural region where a snapshot is genuinely the cheapest oracle. Prefer explicit assertions.
 
+## Skills to invoke before writing tests
+
+Before drafting tests for any task, **read and apply** the relevant skill(s) from `.claude/skills/`:
+
+- **`.claude/skills/mutation-aware-assertions/SKILL.md`** — apply *always*. The core rule: before writing each test, name one plausible mutation to production code that the test would survive. If that mutation breaks the feature, strengthen the test before committing it. Also enforces the empty-input ban and the matrix-over-N-tests rule.
+- **`.claude/skills/behaviour-over-declaration/SKILL.md`** — apply when the AC mentions a *schema*, *index*, *route*, *mapping*, *registration*, *config*, or any declarative wiring. Bans the "framework throws on missing symbol → my test passes" tautology. Forces positive assertions with discriminating real data, including a false-positive row for compound keys.
+
+If the task's AC involves declarative wiring (e.g. TASK-003, TASK-005, TASK-018, TASK-021), both skills apply. Read both files in full before drafting tests; the rules and worked examples are short.
+
 ## Output format
 
 When given a task ID, respond with:

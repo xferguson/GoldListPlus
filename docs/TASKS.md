@@ -44,7 +44,7 @@
 - **Out of scope:** real icons (placeholders OK), data layer.
 
 ### TASK-003: Dexie schema + ID generator
-- [ ] Status — **NEXT UP.** Dispatch the `qa-engineer` subagent to write failing tests for AC-1..AC-4. Then `implementer`, then `code-reviewer`.
+- [✓] Status — complete (2026-05-15). QA Engineer wrote 21 tests across `src/db/db.test.ts` and `src/db/ids.test.ts`; Implementer made them pass with a subclassed `Dexie` (`GoldListDb`) and `monotonicFactory` ULID generator; Code Reviewer approved; second-pass QA confirmed honest coverage with two non-blocking deferrals (archivedAt filter test covered transitively by TASK-005; explicit persistence-across-reopen test deferred until migrations land).
 - **Files touched:** `src/db/db.ts`, `src/db/ids.ts`, `src/db/db.test.ts`, `package.json` (add `dexie`, `ulid`, `fake-indexeddb` dev).
 - **Depends on:** TASK-001.
 - **Acceptance criteria:**
@@ -55,7 +55,7 @@
 - **Out of scope:** repos.
 
 ### TASK-004: Pure distillation logic
-- [ ] Status
+- [ ] Status — **NEXT UP.** Depends on `none` (already satisfied); free to start. Pure-logic task; type imports come from `src/db/db.ts` per §4 note. QA writes `src/lib/distillation.test.ts` + `src/lib/tiers.test.ts` first.
 - **Files touched:** `src/lib/distillation.ts`, `src/lib/distillation.test.ts`, `src/lib/tiers.ts`.
 - **Depends on:** none (purely typed; data model copy lives here as type imports).
 - **Acceptance criteria:**

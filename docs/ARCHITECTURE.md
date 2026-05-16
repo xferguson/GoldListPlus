@@ -72,6 +72,8 @@ src/
 
 ## 4. Data model (canonical)
 
+> The canonical row types (`Book`, `BookSettings`, `Page`, `Card`, `ReviewEvent`, `Tier`, `Rating`) are exported from `src/db/db.ts`. Repos and `src/lib/**` import types from there; there is no separate `src/db/types.ts`.
+
 ```ts
 type Tier = 'bronze' | 'silver' | 'gold';
 type Rating = 'wrong' | 'hard' | 'moderate' | 'easy';
@@ -128,6 +130,22 @@ type ReviewEvent = {
 };
 ```
 
+### Indexes (Dexie schema, version 1)
+
+| Table | Schema string | Rationale |
+|---|---|---|
+| `books` | `'id'` | Primary-key lookup (`books.get`) and full-table scan for `books.list`. No secondary indexes — Books are few and always enumerated. |
+| `pages` | `'id, bookId, reviewableAt, [bookId+tier]'` | `bookId` powers `pages.listByBook` and cascade delete; `reviewableAt` powers `pages.listDue(now)` (range query, naturally excludes `null` Gold pages); compound `[bookId+tier]` powers the tier-grouped Book overview (TASK-016 AC-2). |
+| `cards` | `'id, pageId, bookId, archivedAt'` | `pageId` powers `cards.listByPage` and List-detail views; `bookId` powers Book cascade delete; `archivedAt` lets future queries filter live vs. archived Cards without a table scan. |
+| `reviews` | `'id, cardId, pageId, reviewedAt'` | `cardId` powers `reviews.listByCard`; `pageId` powers `reviews.listByPage` and `reviews.latestPerCardForPage`; `reviewedAt` powers stats time-window queries. |
+
+Notes:
+- The primary key is the leading bare field (`id`, a ULID — see ADR / §6).
+- Secondary single-field indexes are comma-separated bare fields after the primary key.
+- Compound indexes use the `[a+b]` syntax and are added only where a known query needs them.
+- Array fields (`Page.cardIds`, `Card.parentIds`) are **not** indexed. Dexie multi-entry indexes (`*field`) have edge cases (uniqueness, ordering, large arrays); we instead query from the linking field on the other side (e.g. `cards.listByPage(pageId)` uses the `pageId` index on `cards`).
+- Any future index addition is a schema-version bump in `src/db/db.ts` with a migration, not an edit to the version-1 strings above.
+
 ## 5. ADRs
 
 ### ADR-001: Tier as string union, not numeric stage
@@ -168,6 +186,29 @@ type ReviewEvent = {
 - Component files: PascalCase. Library / repo files: camelCase.
 - All IDs are ULIDs (`src/db/ids.ts` wraps a tiny ULID generator).
 - All times are millisecond Unix epochs. No `Date` objects in data layer.
+
+### File-size limits
+
+One responsibility per file. The intent is readability, testability, and preventing god-modules that quietly accrete unrelated logic. Limits below are drawn from common conventions (Sonar/CodeClimate ~250–500 lines, React community ~200–300 for components, tighter caps for pure-logic and store modules where focus matters most). Targets are the soft expectation; hard caps are the kickback threshold.
+
+| Bucket | Target (lines) | Hard cap (lines) |
+|---|---|---|
+| `src/lib/**` (pure logic) | 150 | 200 |
+| `src/db/repos/*.ts` | 150 | 200 |
+| `src/db/db.ts`, `src/db/ids.ts` | 100 | 150 |
+| `src/components/*.tsx` | 200 | 300 |
+| `src/routes/**` | 250 | 350 |
+| `src/stores/*.ts` | 100 | 150 |
+| `*.test.ts` / `*.test.tsx` | 400 | 600 |
+| Config (`vite.config.ts`, `tsconfig*.json`, `eslint.config.js`, `vitest.setup.ts`) | — | — (uncapped) |
+| Docs (`docs/*.md`, `README.md`, `CLAUDE.md`) | — | — (uncapped; use H2/H3 sectioning) |
+| Generated (`package-lock.json`, `public/icons/*`) | — | — (uncapped) |
+
+Line counts include code and comments but exclude trailing blank lines.
+
+- **Exceeding the hard cap:** the preferred response is to split the file by responsibility (extract a helper module, a sub-component, or a focused repo function). Do **not** relax the cap as a first move.
+- **Documented exception:** if splitting genuinely does not make sense (e.g. a single cohesive state machine that loses clarity when split), add a one-line `// rationale-for-size: <reason>` comment at the top of the file **and** record the exception in the relevant task in `TASKS.md`. Exceptions are visible by design.
+- **Enforcement:** these limits are a review rule, not a CI gate. The code-reviewer checks on first pass; the tech-lead audits the full diff against this table on the second pass and kicks back violations.
 
 ## 7. PWA configuration constraints
 
