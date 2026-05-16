@@ -72,6 +72,8 @@ src/
 
 ## 4. Data model (canonical)
 
+> The canonical row types (`Book`, `BookSettings`, `Page`, `Card`, `ReviewEvent`, `Tier`, `Rating`) are exported from `src/db/db.ts`. Repos and `src/lib/**` import types from there; there is no separate `src/db/types.ts`.
+
 ```ts
 type Tier = 'bronze' | 'silver' | 'gold';
 type Rating = 'wrong' | 'hard' | 'moderate' | 'easy';
@@ -127,6 +129,22 @@ type ReviewEvent = {
   reviewedAt: number;
 };
 ```
+
+### Indexes (Dexie schema, version 1)
+
+| Table | Schema string | Rationale |
+|---|---|---|
+| `books` | `'id'` | Primary-key lookup (`books.get`) and full-table scan for `books.list`. No secondary indexes — Books are few and always enumerated. |
+| `pages` | `'id, bookId, reviewableAt, [bookId+tier]'` | `bookId` powers `pages.listByBook` and cascade delete; `reviewableAt` powers `pages.listDue(now)` (range query, naturally excludes `null` Gold pages); compound `[bookId+tier]` powers the tier-grouped Book overview (TASK-016 AC-2). |
+| `cards` | `'id, pageId, bookId, archivedAt'` | `pageId` powers `cards.listByPage` and List-detail views; `bookId` powers Book cascade delete; `archivedAt` lets future queries filter live vs. archived Cards without a table scan. |
+| `reviews` | `'id, cardId, pageId, reviewedAt'` | `cardId` powers `reviews.listByCard`; `pageId` powers `reviews.listByPage` and `reviews.latestPerCardForPage`; `reviewedAt` powers stats time-window queries. |
+
+Notes:
+- The primary key is the leading bare field (`id`, a ULID — see ADR / §6).
+- Secondary single-field indexes are comma-separated bare fields after the primary key.
+- Compound indexes use the `[a+b]` syntax and are added only where a known query needs them.
+- Array fields (`Page.cardIds`, `Card.parentIds`) are **not** indexed. Dexie multi-entry indexes (`*field`) have edge cases (uniqueness, ordering, large arrays); we instead query from the linking field on the other side (e.g. `cards.listByPage(pageId)` uses the `pageId` index on `cards`).
+- Any future index addition is a schema-version bump in `src/db/db.ts` with a migration, not an edit to the version-1 strings above.
 
 ## 5. ADRs
 
