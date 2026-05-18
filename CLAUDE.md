@@ -25,6 +25,8 @@ Definitions live in [.claude/agents/](.claude/agents/). They auto-load at sessio
 
 The main thread's job is **orchestration**: dispatch the right subagent for the right phase, collect the artefact, advance. The main thread does NOT write production code, tests, or design docs directly — it routes the work.
 
+**Always finish a task by pushing the branch and opening a PR** once all reviews (Code Reviewer + second-pass QA + Tech Lead + Product Designer) have approved. The PR is where the user reads every reviewer's verdict in one place and leaves feedback. Do not stop at "committed locally" — push and open the PR by default. Use `gh pr create` against `main`; mirror the TASK-003 / PR #1 style.
+
 ## Current state (last touched: TASK-002 complete)
 
 - [✓] TASK-001 — Vite + React + TS + Tailwind + tooling. `npm run dev/build/test/typecheck` all green.
