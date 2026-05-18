@@ -150,8 +150,6 @@ describe('TASK-004 AC-3: flagCardForDistillation — full 4 × 8 ratings × sett
     expect(MATRIX).toHaveLength(32);
     const trueCount = MATRIX.filter((r) => r.expected).length;
     const falseCount = MATRIX.filter((r) => !r.expected).length;
-    expect(trueCount).toBeGreaterThan(0);
-    expect(falseCount).toBeGreaterThan(0);
     // 8 wrong=true + 4 hard=true + 4 moderate=true + 4 easy=true = 20 true
     expect(trueCount).toBe(20);
     expect(falseCount).toBe(12);
