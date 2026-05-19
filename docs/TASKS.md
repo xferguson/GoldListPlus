@@ -83,6 +83,61 @@
   5. `reviews.append(event)`, `reviews.listByCard(cardId)`, `reviews.listByPage(pageId)`, `reviews.latestPerCardForPage(pageId)` returns a `Map<string, ReviewEvent>`.
   6. All tests run against `fake-indexeddb`.
 
+### TASK-006: (defined in parallel session)
+- Reserved for the app-store skeleton + settings model. Definition owned by a parallel tech-lead session. Treat as a black box for the purposes of 007–009: assumed to export `useAppStore` from `src/stores/useAppStore.ts` and a settings type with defaults.
+
+### TASK-007: Route shell — full HashRouter tree + Layout
+- [ ] Status
+- **Files touched:** `src/App.tsx`, `src/routes/Layout.tsx`, `src/routes/Dashboard/index.tsx`, `src/routes/Book/index.tsx`, `src/routes/ListDetail/index.tsx`, `src/routes/Review/index.tsx`, `src/routes/Distill/ReviewSummary/index.tsx`, `src/routes/Distill/Builder/index.tsx`, `src/routes/Distill/GoldSummary/index.tsx`, `src/routes/Stats/index.tsx`, `src/routes/Settings/index.tsx`, `src/routes/NotFound.tsx`.
+- **Depends on:** TASK-002.
+- **Acceptance criteria:**
+  1. `App.tsx` retains `HashRouter` (ADR-004) and renders a single `<Layout/>` element that contains `<Routes>` and a global header/nav. No `BrowserRouter`.
+  2. The route table contains exactly these paths, each mapped to its own placeholder component file:
+     - `/` → `routes/Dashboard`
+     - `/book/:bookId` → `routes/Book`
+     - `/list/:pageId` → `routes/ListDetail`
+     - `/review/:pageId` → `routes/Review`
+     - `/distill/review/:pageId` → `routes/Distill/ReviewSummary`
+     - `/distill/builder/:parentId` → `routes/Distill/Builder`
+     - `/distill/gold/:pageId` → `routes/Distill/GoldSummary`
+     - `/stats` → `routes/Stats`
+     - `/settings` → `routes/Settings`
+     - `*` → `routes/NotFound`
+  3. Each placeholder component renders a unique, asserted-against test marker: a `<main>` containing a unique `data-testid` (`route-dashboard`, `route-book`, `route-list-detail`, `route-review`, `route-distill-review-summary`, `route-distill-builder`, `route-distill-gold-summary`, `route-stats`, `route-settings`, `route-not-found`) and the human-readable route name as text.
+  4. Visiting each route via `MemoryRouter` + `initialEntries={['/<path>']}` in a test renders exactly the matching `data-testid`. Route params are exposed (the Book placeholder displays its `bookId`, the Review placeholder displays its `pageId`, etc.) so tests can verify routing actually parsed the param.
+  5. `Layout.tsx` renders nav links to Dashboard, Stats, Settings (no deep links to dynamic routes) and an `<Outlet/>` for child routes; **or** if no nested-route structure is chosen, Layout wraps `<Routes>` directly — either is acceptable but the file must exist and contain the nav.
+  6. The previous `/about` placeholder is removed.
+- **Out of scope:** real screen content for any route; data fetching; store wiring beyond what TASK-006 already exports.
+
+### TASK-008: Tier visual primitives + Modal
+- [ ] Status
+- **Files touched:** `src/components/TierBadge.tsx`, `src/components/TierBorder.tsx`, `src/components/Modal.tsx`, `src/lib/tiers.ts`, `src/components/TierBadge.test.tsx`, `src/components/TierBorder.test.tsx`, `src/components/Modal.test.tsx`.
+- **Depends on:** TASK-004 (existing `src/lib/tiers.ts` with `nextTier`).
+- **Acceptance criteria:**
+  1. `src/lib/tiers.ts` additionally exports a pure `tierVisual(tier: Tier): { label: string; borderColor: string; borderWidthPx: number }` with values matching PRD §4 exactly: `bronze → 'BRONZE LIST', '#B87333', 4`; `silver → 'SILVER LIST', '#C0C0C0', 4`; `gold → 'GOLD LIST', '#D4AF37', 4`. No React, no Tailwind imports — pure data.
+  2. `TierBadge` is a function component that accepts `tier: Tier` and renders the uppercased label from `tierVisual(tier)`. The rendered element has `role="status"` (or an explicit aria-label equal to the label) so colour is not the sole accessibility signal.
+  3. `TierBorder` accepts `tier: Tier` and `children: ReactNode` and renders a wrapper element whose inline `style` sets `borderColor` and `borderWidth` to the values from `tierVisual(tier)`. Children render inside.
+  4. `Modal` accepts `open: boolean`, `onClose: () => void`, `title: string`, and `children: ReactNode`. When `open` is false it renders nothing. When `open` is true it renders into a React portal mounted on `document.body` and the dialog element has `role="dialog"` with `aria-modal="true"` and `aria-label` (or `aria-labelledby`) reflecting `title`.
+  5. `Modal` calls `onClose` when the user presses `Escape` and when the backdrop (not the dialog content) is clicked. Clicking inside the dialog content does NOT call `onClose`.
+  6. Tests assert behaviour, not snapshots: tier-visual values per tier, `TierBadge` text and a11y attribute, `TierBorder` style attribute values, `Modal` open/closed render, portal target, Escape-key close, backdrop close, content-click does-not-close.
+- **Out of scope:** focus trap (deferred; flag for future a11y pass), animation, stacking multiple modals.
+
+### TASK-009: Review-session store
+- [ ] Status
+- **Files touched:** `src/stores/useReviewSessionStore.ts`, `src/stores/useReviewSessionStore.test.ts`.
+- **Depends on:** TASK-006 (Zustand setup pattern), TASK-003 (`Rating` type from `src/db/db`).
+- **Acceptance criteria:**
+  1. Exports a Zustand store hook `useReviewSessionStore`. State shape: `{ pageId: string | null; cardIds: string[]; index: number; flipped: boolean; ratings: Record<string, Rating> }`.
+  2. Exports actions on the store: `start(pageId: string, cardIds: string[])`, `flip()`, `rate(rating: Rating)`, `next()`, `reset()`.
+  3. `start` initialises state: `pageId` set, `cardIds` copied, `index = 0`, `flipped = false`, `ratings = {}`. Calling `start` on an already-active session replaces it.
+  4. `flip` toggles `flipped`.
+  5. `rate(r)` records `ratings[cardIds[index]] = r`. It does NOT auto-advance. Calling `rate` when `pageId === null` or `index` is out of bounds is a no-op.
+  6. `next()` advances `index` by 1 and resets `flipped` to `false`. `next()` past the last card leaves `index === cardIds.length` (a sentinel meaning "session done"); further `next()` calls do not increment beyond that.
+  7. `reset()` returns state to the initial empty shape (`pageId: null`, `cardIds: []`, `index: 0`, `flipped: false`, `ratings: {}`).
+  8. The store holds no I/O. It does not touch Dexie, repos, or `Date.now()`. Ratings are persisted as `ReviewEvent`s by the Review route (TASK-012), not by this store.
+  9. Tests exercise actions directly via `useReviewSessionStore.getState()` / `setState` and do not require React rendering.
+- **Out of scope:** persistence to IndexedDB; appending `ReviewEvent`s; keyboard handling (that lives in TASK-012's Review route).
+
 ---
 
 ## Vertical slices (interleaved UI + behaviour)
@@ -90,7 +145,7 @@
 ### TASK-010: Create a Book (UI)
 - [ ] Status
 - **Files touched:** `src/routes/Dashboard/index.tsx`, `src/routes/Book/NewBook.tsx`, `src/stores/useAppStore.ts`.
-- **Depends on:** TASK-002, TASK-005.
+- **Depends on:** TASK-005, TASK-006, TASK-007.
 - **Acceptance criteria:**
   1. Dashboard shows a "New Book" affordance.
   2. NewBook form fields: name (required), source lang (required), target lang (required), with defaults from settings.
@@ -100,7 +155,7 @@
 ### TASK-011: Create a Bronze List + add Cards
 - [ ] Status
 - **Files touched:** `src/routes/Book/index.tsx`, `src/routes/ListDetail/index.tsx`, `src/components/TierBadge.tsx`, `src/components/TierBorder.tsx`, `src/lib/tiers.ts`.
-- **Depends on:** TASK-010.
+- **Depends on:** TASK-008, TASK-010.
 - **Acceptance criteria:**
   1. From a Book overview, the user can create a new Bronze List with an auto-generated title (`Bronze 1`, `Bronze 2`, …).
   2. ListDetail allows adding Cards (source + target) until the user marks the List "Ready" (sets a flag — actually we just set `reviewableAt = createdAt + intervalDays` at creation and lock further edits when `reviewedAt` is set).
@@ -110,7 +165,7 @@
 ### TASK-012: Flashcard Review flow
 - [ ] Status
 - **Files touched:** `src/routes/Review/index.tsx`, `src/components/Flashcard.tsx`, `src/components/RatingButtons.tsx`, `src/stores/useReviewSessionStore.ts`.
-- **Depends on:** TASK-011.
+- **Depends on:** TASK-009, TASK-011.
 - **Acceptance criteria:**
   1. ListDetail for a due List shows "Start Review"; for a not-yet-due List, shows the due date and disables Start Review (Gold has "Review on demand" instead).
   2. Review shows one Card at a time, source side first.
@@ -132,7 +187,7 @@
 ### TASK-014: Distillation Builder
 - [ ] Status
 - **Files touched:** `src/routes/Distill/Builder/index.tsx`, `src/routes/Distill/Builder/AddEntryModal.tsx`, `src/components/Modal.tsx`.
-- **Depends on:** TASK-013.
+- **Depends on:** TASK-008, TASK-013.
 - **Acceptance criteria:**
   1. Two-pane layout per PRD §5.5.
   2. "Add entry" modal: multi-select chips for parent Cards; source and target inputs; **both inputs empty** when the modal opens regardless of parent selection.
