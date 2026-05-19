@@ -27,24 +27,6 @@ The main thread's job is **orchestration**: dispatch the right subagent for the 
 
 **Always finish a task by pushing the branch and opening a PR** once all reviews (Code Reviewer + second-pass QA + Tech Lead + Product Designer) have approved. The PR is where the user reads every reviewer's verdict in one place and leaves feedback. Do not stop at "committed locally" — push and open the PR by default. Use `gh pr create` against `main`; mirror the TASK-003 / PR #1 style.
 
-## Current state (last touched: TASK-002 complete)
-
-- [✓] TASK-001 — Vite + React + TS + Tailwind + tooling. `npm run dev/build/test/typecheck` all green.
-- [✓] TASK-002 — vite-plugin-pwa + HashRouter + `base: '/GoldListPlus/'` + placeholder icons.
-- [ ] **TASK-003 — Dexie schema + ID generator. NEXT.**
-- Tasks TASK-004 through TASK-022 are queued in `docs/TASKS.md`.
-
-TASK-001 and TASK-002 were completed directly by the main thread (before the subagent workflow was in effect) — they are pure config and bootstrap, no production logic. Starting with TASK-003, every task must go through the subagent flow.
-
-## How to pick up TASK-003
-
-1. Read `docs/TASKS.md` → TASK-003.
-2. Read `docs/ARCHITECTURE.md` §4 (data model + indexes line).
-3. Dispatch the `qa-engineer` subagent with a self-contained prompt that points it at the task ID and the AC. Tell it to write `src/db/db.test.ts` and `src/db/ids.test.ts`, run `npm run test`, and confirm Red.
-4. Once Red is confirmed, dispatch the `implementer` subagent to write `src/db/db.ts` and `src/db/ids.ts` to make the tests pass.
-5. Once Green, dispatch the `code-reviewer` subagent against the diff.
-6. If approved, run the second pass (QA → Tech Lead → Product Designer) and advance to TASK-004.
-
 ## Sacred product rules (PRD §8 — never violate)
 
 1. **Distillation is manual rewriting.** No auto-built next list. The entry form does NOT pre-fill from parent Cards.
