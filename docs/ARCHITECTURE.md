@@ -194,6 +194,12 @@ Notes:
 **Alternatives considered:** Persist the session via Zustand `persist` middleware so a refresh mid-review resumes; collapse `ratings` into auto-appended `ReviewEvent`s inside the store.
 **Why:** ADR-003 keeps `ReviewEvent` the source of truth for rating history — letting the store also write events would split that responsibility. Mid-review resume is a nice-to-have but introduces edge cases (stale `cardIds` after a Card edit, half-persisted ratings) that are not worth the cost for v1; the user simply re-starts the review. The store stays pure-reducer-shaped so it is testable without React.
 
+### ADR-011: `tierVisual` returns Tailwind class strings, not raw style values
+**Decision:** `tierVisual(tier)` in `src/lib/tiers.ts` returns `{ label, borderClass, badgeClass, textClass }` where each `*Class` field is a Tailwind class-token string ready to be passed straight to `className={...}`. Consumers (`TierBadge`, `TierBorder`, future Distillation Builder header, Dashboard / Book overview grouping) compose these via `className`, not via inline `style.borderColor` / `style.borderWidth`.
+**Alternatives considered:** Returning raw values (e.g. `{ label, borderColor: '#B87333', borderWidthPx: 4 }`) so consumers set inline `style` directly. An earlier draft of TASK-008 specified exactly that shape.
+**Why class strings:** (a) Tailwind's JIT sees the class names at build time, so the colours live in the design system rather than in scattered hex literals; (b) dark-mode / theme variants (TASK-021 polish) can layer additional class tokens onto the existing fields without touching consumers; (c) inline `style` would bypass Tailwind utility composition for borders elsewhere (e.g. `border-4 rounded-lg` on the wrapper). The PRD §4 palette is honoured semantically (bronze→amber, silver→slate, gold→yellow) and is asserted by TASK-006 AC-4's allow-set regex, which lets the exact shade be tuned without rewriting tests.
+**Status:** Supersedes the draft hex+pixel contract that TASK-008 originally listed before TASK-006 shipped. TASK-008 is now a pure consumer of `tierVisual`.
+
 ## 6. Cross-cutting rules
 
 - TypeScript `strict: true`, `noUncheckedIndexedAccess: true`, `noImplicitOverride: true`.

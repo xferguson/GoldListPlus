@@ -127,21 +127,21 @@
 
 ### TASK-008: Tier visual primitives + Modal
 - [ ] Status
-- **Files touched:** `src/components/TierBadge.tsx`, `src/components/TierBorder.tsx`, `src/components/Modal.tsx`, `src/lib/tiers.ts`, `src/components/TierBadge.test.tsx`, `src/components/TierBorder.test.tsx`, `src/components/Modal.test.tsx`.
-- **Depends on:** TASK-004 (existing `src/lib/tiers.ts` with `nextTier`).
+- **Files touched:** `src/components/TierBadge.tsx`, `src/components/TierBorder.tsx`, `src/components/Modal.tsx`, `src/components/TierBadge.test.tsx`, `src/components/TierBorder.test.tsx`, `src/components/Modal.test.tsx`.
+- **Depends on:** TASK-006 (`tierVisual` from `src/lib/tiers.ts`).
 - **Acceptance criteria:**
-  1. `src/lib/tiers.ts` additionally exports a pure `tierVisual(tier: Tier): { label: string; borderColor: string; borderWidthPx: number }` with values matching PRD §4 exactly: `bronze → 'BRONZE LIST', '#B87333', 4`; `silver → 'SILVER LIST', '#C0C0C0', 4`; `gold → 'GOLD LIST', '#D4AF37', 4`. No React, no Tailwind imports — pure data.
-  2. `TierBadge` is a function component that accepts `tier: Tier` and renders the uppercased label from `tierVisual(tier)`. The rendered element has `role="status"` (or an explicit aria-label equal to the label) so colour is not the sole accessibility signal.
-  3. `TierBorder` accepts `tier: Tier` and `children: ReactNode` and renders a wrapper element whose inline `style` sets `borderColor` and `borderWidth` to the values from `tierVisual(tier)`. Children render inside.
+  1. `TierBadge` and `TierBorder` import `tierVisual` from `src/lib/tiers.ts` and do NOT redefine the mapping. The visual contract (`{ label, borderClass, badgeClass, textClass }` of Tailwind class strings) is owned by TASK-006 and consumed here unchanged.
+  2. `TierBadge` is a function component that accepts `tier: Tier` and renders the `label` from `tierVisual(tier)`. The Tailwind `badgeClass` from `tierVisual(tier)` is passed through `className={...}` (no inline `style`). The rendered element has `role="status"` (or an explicit `aria-label` equal to the label) so colour is not the sole accessibility signal.
+  3. `TierBorder` accepts `tier: Tier` and `children: ReactNode` and renders a wrapper element that applies the `borderClass` from `tierVisual(tier)` via `className={...}` (no inline `style.borderColor` / `style.borderWidth`). Children render inside. The wrapper carries whatever fixed-width Tailwind border utility (e.g. `border-4`) is needed so `borderClass` only contributes the colour.
   4. `Modal` accepts `open: boolean`, `onClose: () => void`, `title: string`, and `children: ReactNode`. When `open` is false it renders nothing. When `open` is true it renders into a React portal mounted on `document.body` and the dialog element has `role="dialog"` with `aria-modal="true"` and `aria-label` (or `aria-labelledby`) reflecting `title`.
   5. `Modal` calls `onClose` when the user presses `Escape` and when the backdrop (not the dialog content) is clicked. Clicking inside the dialog content does NOT call `onClose`.
-  6. Tests assert behaviour, not snapshots: tier-visual values per tier, `TierBadge` text and a11y attribute, `TierBorder` style attribute values, `Modal` open/closed render, portal target, Escape-key close, backdrop close, content-click does-not-close.
-- **Out of scope:** focus trap (deferred; flag for future a11y pass), animation, stacking multiple modals.
+  6. Tests assert behaviour, not snapshots: `TierBadge` renders the `label` text and exposes the a11y attribute, and the element's `className` contains the exact `badgeClass` string from `tierVisual(tier)` for each tier; `TierBorder` wrapper's `className` contains the exact `borderClass` string from `tierVisual(tier)` for each tier; `Modal` open/closed render, portal target (`document.body`), Escape-key close, backdrop close, content-click does-not-close.
+- **Out of scope:** focus trap (deferred; flag for future a11y pass), animation, stacking multiple modals, redefining or extending `tierVisual` (that lives in TASK-006 / `src/lib/tiers.ts`).
 
 ### TASK-009: Review-session store
 - [ ] Status
 - **Files touched:** `src/stores/useReviewSessionStore.ts`, `src/stores/useReviewSessionStore.test.ts`.
-- **Depends on:** TASK-006 (Zustand setup pattern), TASK-003 (`Rating` type from `src/db/db`).
+- **Depends on:** TASK-003 (`Rating` type from `src/db/db`). Zustand 5 is already a runtime dependency (installed in TASK-001); no separate Zustand bootstrap task is needed because this store stands alone with no shared store infrastructure.
 - **Acceptance criteria:**
   1. Exports a Zustand store hook `useReviewSessionStore`. State shape: `{ pageId: string | null; cardIds: string[]; index: number; flipped: boolean; ratings: Record<string, Rating> }`.
   2. Exports actions on the store: `start(pageId: string, cardIds: string[])`, `flip()`, `rate(rating: Rating)`, `next()`, `reset()`.
@@ -170,12 +170,12 @@
 
 ### TASK-011: Create a Bronze List + add Cards
 - [ ] Status
-- **Files touched:** `src/routes/Book/index.tsx`, `src/routes/ListDetail/index.tsx`, `src/components/TierBadge.tsx`, `src/components/TierBorder.tsx`, `src/lib/tiers.ts`.
+- **Files touched:** `src/routes/Book/index.tsx`, `src/routes/ListDetail/index.tsx`.
 - **Depends on:** TASK-008, TASK-010.
 - **Acceptance criteria:**
   1. From a Book overview, the user can create a new Bronze List with an auto-generated title (`Bronze 1`, `Bronze 2`, …).
   2. ListDetail allows adding Cards (source + target) until the user marks the List "Ready" (sets a flag — actually we just set `reviewableAt = createdAt + intervalDays` at creation and lock further edits when `reviewedAt` is set).
-  3. ListDetail displays the tier border and label per PRD §4.
+  3. ListDetail displays the tier border and label per PRD §4, by composing the `TierBadge` and `TierBorder` primitives from TASK-008 (which already consume `tierVisual` from `src/lib/tiers.ts`). This task does not edit `src/lib/tiers.ts` or the components themselves.
   4. Soft warning shown when adding the 26th Card; not blocked.
 
 ### TASK-012: Flashcard Review flow
