@@ -97,6 +97,7 @@ The tier label and the colour border are both required — colour alone is not a
   - Links parent ↔ child List references.
   - Navigates to the new List detail view.
 - "Discard draft" deletes any in-flight builder state without mutating the parent List.
+- **Finalizing with zero entries is allowed.** The user may finalize a Builder with no new entries — this creates an empty next-tier List, archives every parent Card, and is the explicit signal "I have dropped everything." The confirm modal should surface this state clearly (e.g. "Finalize with no entries? The next List will be empty."). The repo layer treats zero entries as a valid plan.
 
 ### 5.6 On-demand Gold review
 - A Gold List shows a **"Review on demand"** button instead of a due indicator.

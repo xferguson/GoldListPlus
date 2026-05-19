@@ -168,6 +168,7 @@ Notes:
 ### ADR-005: `finalizePage` returns a plan, a repo applies it
 **Decision:** Distillation finalize logic in `src/lib/distillation.ts` is pure: input is the parent Page + builder inputs, output is `{ childPage, newCards, archivedCardIds }`. `pages.finalize(plan)` writes all of it inside one Dexie transaction.
 **Why:** Pure logic is unit-testable without a DB. The transaction guarantees atomicity even if the SW kills the page mid-write.
+**Implementation note:** `pages.finalize` derives its single timestamp from `plan.childPage.createdAt`; parent `reviewedAt`, parent-card `archivedAt`, and the child Page's `createdAt` all share that instant. Callers should not pass `now` separately.
 
 ### ADR-006: Soft warn on headlist size
 **Decision:** Don't enforce the 25-item cap. Show a warning if the user adds the 26th Card or finalizes with fewer than ~15.
