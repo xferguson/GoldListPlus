@@ -178,6 +178,28 @@ Notes:
 **Decision:** When the user selects parent Cards and opens the entry form, source and target inputs are empty.
 **Why:** Manual rewriting is the *point* of the method. Pre-filling defeats it. PRD §8 sacred rule #1.
 
+### ADR-008: Flat route table; Layout wraps `<Routes>`
+**Decision:** The route tree is a single flat `<Routes>` with no nested `<Route>` parents. A `routes/Layout.tsx` component renders the persistent header/nav around `<Routes>` (or via an `<Outlet/>` if a one-level wrapper is later introduced). Paths are stable: `/`, `/book/:bookId`, `/list/:pageId`, `/review/:pageId`, `/distill/review/:pageId`, `/distill/builder/:parentId`, `/distill/gold/:pageId`, `/stats`, `/settings`, `*`.
+**Alternatives considered:** Nested routes with a `Book` parent owning `ListDetail` children; a file-system convention (TanStack Router / Remix style).
+**Why flat:** The screens have no shared layout *beyond* the global header — a `Book` route is not a visual frame around `ListDetail`; they are sibling views you navigate between. Flat routes keep `App.tsx` legible, keep params local to each screen, and avoid `useOutletContext` plumbing for data already loaded via repos. The placeholder route IDs are an API contract for tests (`data-testid="route-…"`) so the QA Engineer can write router tests in TASK-007 without coupling to component internals.
+
+### ADR-009: `Modal` renders into a portal on `document.body`
+**Decision:** `src/components/Modal.tsx` uses `createPortal` to render into `document.body`. The component owns its own `role="dialog"` / `aria-modal="true"` markup and dismisses on Escape and backdrop click; clicking inside the dialog content does not dismiss.
+**Alternatives considered:** Inline rendering (no portal); the native `<dialog>` element; a third-party headless library (Radix, Headless UI).
+**Why portal + custom:** Inline rendering breaks z-index stacking under Tailwind's transform/overflow ancestors. Native `<dialog>` has uneven Safari behaviour and styling pain points. Headless UI / Radix would be the right call if we needed focus traps, multi-stack, and animations — for v1 a 50-line component covers our two use cases (entry modal, finalize confirm). When a third modal use-case lands or focus-trapping is required, revisit and consider Radix Dialog.
+**Out of scope for v1:** focus trap, stacked modals, scroll-lock — listed as known gaps in TASK-008's "out of scope" so a future ADR can supersede.
+
+### ADR-010: `useReviewSessionStore` is in-memory only; ReviewEvents persist via repo
+**Decision:** The review-session Zustand store (`src/stores/useReviewSessionStore.ts`) holds only ephemeral session state: current page id, card-id array, current index, flip state, in-session ratings map. It does NOT persist to IndexedDB and does NOT append `ReviewEvent`s. The Review route (TASK-012) is responsible for calling `reviews.append(...)` at the moment of each rating; the store's `ratings` map is a UI-side cache used to drive the post-review Distillation Review screen without re-querying.
+**Alternatives considered:** Persist the session via Zustand `persist` middleware so a refresh mid-review resumes; collapse `ratings` into auto-appended `ReviewEvent`s inside the store.
+**Why:** ADR-003 keeps `ReviewEvent` the source of truth for rating history — letting the store also write events would split that responsibility. Mid-review resume is a nice-to-have but introduces edge cases (stale `cardIds` after a Card edit, half-persisted ratings) that are not worth the cost for v1; the user simply re-starts the review. The store stays pure-reducer-shaped so it is testable without React.
+
+### ADR-011: `tierVisual` returns Tailwind class strings, not raw style values
+**Decision:** `tierVisual(tier)` in `src/lib/tiers.ts` returns `{ label, borderClass, badgeClass, textClass }` where each `*Class` field is a Tailwind class-token string ready to be passed straight to `className={...}`. Consumers (`TierBadge`, `TierBorder`, future Distillation Builder header, Dashboard / Book overview grouping) compose these via `className`, not via inline `style.borderColor` / `style.borderWidth`.
+**Alternatives considered:** Returning raw values (e.g. `{ label, borderColor: '#B87333', borderWidthPx: 4 }`) so consumers set inline `style` directly. An earlier draft of TASK-008 specified exactly that shape.
+**Why class strings:** (a) Tailwind's JIT sees the class names at build time, so the colours live in the design system rather than in scattered hex literals; (b) dark-mode / theme variants (TASK-021 polish) can layer additional class tokens onto the existing fields without touching consumers; (c) inline `style` would bypass Tailwind utility composition for borders elsewhere (e.g. `border-4 rounded-lg` on the wrapper). The PRD §4 palette is honoured semantically (bronze→amber, silver→slate, gold→yellow) and is asserted by TASK-006 AC-4's allow-set regex, which lets the exact shade be tuned without rewriting tests.
+**Status:** Supersedes the draft hex+pixel contract that TASK-008 originally listed before TASK-006 shipped. TASK-008 is now a pure consumer of `tierVisual`.
+
 ## 6. Cross-cutting rules
 
 - TypeScript `strict: true`, `noUncheckedIndexedAccess: true`, `noImplicitOverride: true`.

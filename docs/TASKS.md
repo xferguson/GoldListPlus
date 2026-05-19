@@ -84,7 +84,7 @@
   6. All tests run against `fake-indexeddb`.
 
 ### TASK-006: Tier visual mapping (colour, label, border) in `src/lib/tiers.ts`
-- [✓] Status — complete (2026-05-19). QA Engineer wrote 19 new tests in `src/lib/tiers.test.ts` (AC-1 ×3 label cases, AC-2 ×3 sort/stability/strict-monotonic, AC-3 ×3 grouped suites covering label-drift `it.each`, non-empty/trim/no-double-space `it.each`, pairwise distinctness across tiers, AC-4 ×3 borderClass allow-set regex per tier, AC-5 ×2 keyset parity + anchored field-set, AC-6 ×6 source-purity scan via `import.meta.glob('?raw')` over forbidden module imports + `Date.now(`/`window.` substrings + load-guard). Implementer extended `src/lib/tiers.ts` with `tierLabel`, `tierOrder`, `tierVisual` — three exhaustive `switch` returns with no `default` branch, all driven off the `Tier` string union. Code Reviewer approved; second-pass QA confirmed mutation-resistant coverage with two non-blocking deferrals: AC-3 within-object distinctness (`borderClass !== badgeClass !== textClass` inside a single tier — defer to TASK-011 visual review), and AC-6 source-scan does not cover `globalThis.` / `process.` (TS strict + vite raw import already block these, low priority). Second-pass Tech Lead audit clean: `src/lib/tiers.ts` is 47 non-blank lines (well under 150 soft / 200 hard); `src/lib/tiers.test.ts` is 174 non-blank lines (well under 400 soft / 600 hard); only import is `import type { Tier } from '../db/db'` (permitted by §2 type-import paragraph); no React, Dexie, `window`, `Date.now()`, `any`, `@ts-ignore`, default export, or unjustified `eslint-disable`; the single `as Record<string, string>` cast in the test file is the standard vite `import.meta.glob` idiom. §2 promise of "tier constants, visual mapping (colour, label, border)" honoured — `tierVisual` returns `{ label, borderClass, badgeClass, textClass }`; no separate `tierColor` is needed because colour is encoded into the three class-string fields, which is the Tailwind-idiomatic shape consumers will pass to `className`. ADR-001 honoured: `tierOrder` is a sort key derived from the string union at call time, not a stored numeric stage — no `stage + 1` arithmetic is possible on persisted rows. Forward note for TASK-011 / TASK-016: consumers should expect `tierVisual(tier)` to return three semantically-different class strings per tier (border / badge / text), all single-line Tailwind class lists ready for `className={...}`; dark-mode variants are explicitly out of scope and will require a new ADR if added later (TASK-021 polish). Forward note for TASK-014: tier visual mapping is now ready for the Builder's child-List preview header.
+- [✓] Status — complete (2026-05-19). QA Engineer wrote 19 new tests in `src/lib/tiers.test.ts` (AC-1 ×3 label cases, AC-2 ×3 sort/stability/strict-monotonic, AC-3 ×3 grouped suites covering label-drift `it.each`, non-empty/trim/no-double-space `it.each`, pairwise distinctness across tiers, AC-4 ×3 borderClass allow-set regex per tier, AC-5 ×2 keyset parity + anchored field-set, AC-6 ×6 source-purity scan via `import.meta.glob('?raw')` over forbidden module imports + `Date.now(`/`window.` substrings + load-guard). Implementer extended `src/lib/tiers.ts` with `tierLabel`, `tierOrder`, `tierVisual` — three exhaustive `switch` returns with no `default` branch, all driven off the `Tier` string union. Code Reviewer approved; second-pass QA confirmed mutation-resistant coverage with two non-blocking deferrals: AC-3 within-object distinctness (`borderClass !== badgeClass !== textClass` inside a single tier — defer to TASK-011 visual review), and AC-6 source-scan does not cover `globalThis.` / `process.` (TS strict + vite raw import already block these, low priority). Second-pass Tech Lead audit clean: `src/lib/tiers.ts` is 47 non-blank lines (well under 150 soft / 200 hard); `src/lib/tiers.test.ts` is 174 non-blank lines (well under 400 soft / 600 hard); only import is `import type { Tier } from '../db/db'` (permitted by §2 type-import paragraph); no React, Dexie, `window`, `Date.now()`, `any`, `@ts-ignore`, default export, or unjustified `eslint-disable`; the single `as Record<string, string>` cast in the test file is the standard vite `import.meta.glob` idiom. §2 promise of "tier constants, visual mapping (colour, label, border)" honoured — `tierVisual` returns `{ label, borderClass, badgeClass, textClass }`; no separate `tierColor` is needed because colour is encoded into the three class-string fields, which is the Tailwind-idiomatic shape consumers will pass to `className`. ADR-001 honoured: `tierOrder` is a sort key derived from the string union at call time, not a stored numeric stage — no `stage + 1` arithmetic is possible on persisted rows. Forward note for TASK-008 (proximate consumer — `TierBadge` / `TierBorder`) and TASK-011 / TASK-016 (transitive consumers via those components): consumers should expect `tierVisual(tier)` to return three semantically-different class strings per tier (border / badge / text), all single-line Tailwind class lists ready for `className={...}`; dark-mode variants are explicitly out of scope and will require a new ADR if added later (TASK-021 polish). Forward note for TASK-014: tier visual mapping is now ready for the Builder's child-List preview header.
 - **Files touched:** `src/lib/tiers.ts`, `src/lib/tiers.test.ts`.
 - **Depends on:** TASK-004 (extends the existing `tiers.ts` that already exports `nextTier`).
 - **Acceptance criteria:**
@@ -98,9 +98,61 @@
   5. `tierVisual` is exhaustive over the three tier strings with no fallback/`default` branch returning a generic value. Tested by asserting `Object.keys(tierVisual('bronze'))`, `Object.keys(tierVisual('silver'))`, `Object.keys(tierVisual('gold'))` are deeply equal (same field set, same order).
   6. `src/lib/tiers.ts` remains pure: no React, no Dexie, no `window`, no `Date.now()`. Tested by a source-level assertion that `tiers.ts` contains no `import` from `react`, `react-dom`, `dexie`, or `react-router-dom` (string-search assertion inside the test reading the file as text). Note: `import type { Tier } from '../db/db'` is explicitly permitted by ARCHITECTURE.md §2 ("Repos and `src/lib/**` import types from there"), so `'../db/db'` is NOT in the forbidden set; runtime imports from `../db/db` and `../db/repos/` are already blocked by §3 rule 2 (purity) and surface in code review, not in this string scan.
 - **Out of scope:**
-  - The `<TierBadge/>` and `<TierBorder/>` components themselves (TASK-011 consumes the mapping).
+  - The `<TierBadge/>` and `<TierBorder/>` components themselves (TASK-008 is the proximate consumer of the mapping; TASK-011 consumes it transitively via those components).
   - Dark-mode / theme variants (single palette for now; revisit in TASK-021 polish).
   - Any tier-related logic that isn't pure visual mapping (`nextTier` already exists from TASK-004 and is not re-tested here).
+
+### TASK-007: Route shell — full HashRouter tree + Layout
+- [ ] Status
+- **Files touched:** `src/App.tsx`, `src/routes/Layout.tsx`, `src/routes/Dashboard/index.tsx`, `src/routes/Book/index.tsx`, `src/routes/ListDetail/index.tsx`, `src/routes/Review/index.tsx`, `src/routes/Distill/ReviewSummary/index.tsx`, `src/routes/Distill/Builder/index.tsx`, `src/routes/Distill/GoldSummary/index.tsx`, `src/routes/Stats/index.tsx`, `src/routes/Settings/index.tsx`, `src/routes/NotFound.tsx`.
+- **Depends on:** TASK-002.
+- **Acceptance criteria:**
+  1. `App.tsx` retains `HashRouter` (ADR-004) and renders a single `<Layout/>` element that contains `<Routes>` and a global header/nav. No `BrowserRouter`.
+  2. The route table contains exactly these paths, each mapped to its own placeholder component file:
+     - `/` → `routes/Dashboard`
+     - `/book/:bookId` → `routes/Book`
+     - `/list/:pageId` → `routes/ListDetail`
+     - `/review/:pageId` → `routes/Review`
+     - `/distill/review/:pageId` → `routes/Distill/ReviewSummary`
+     - `/distill/builder/:parentId` → `routes/Distill/Builder`
+     - `/distill/gold/:pageId` → `routes/Distill/GoldSummary`
+     - `/stats` → `routes/Stats`
+     - `/settings` → `routes/Settings`
+     - `*` → `routes/NotFound`
+  3. Each placeholder component renders a unique, asserted-against test marker: a `<main>` containing a unique `data-testid` (`route-dashboard`, `route-book`, `route-list-detail`, `route-review`, `route-distill-review-summary`, `route-distill-builder`, `route-distill-gold-summary`, `route-stats`, `route-settings`, `route-not-found`) and the human-readable route name as text.
+  4. Visiting each route via `MemoryRouter` + `initialEntries={['/<path>']}` in a test renders exactly the matching `data-testid`. Route params are exposed (the Book placeholder displays its `bookId`, the Review placeholder displays its `pageId`, etc.) so tests can verify routing actually parsed the param.
+  5. `Layout.tsx` renders nav links to Dashboard, Stats, Settings (no deep links to dynamic routes) and an `<Outlet/>` for child routes; **or** if no nested-route structure is chosen, Layout wraps `<Routes>` directly — either is acceptable but the file must exist and contain the nav.
+  6. The previous `/about` placeholder is removed.
+- **Out of scope:** real screen content for any route; data fetching; store wiring beyond what TASK-006 already exports.
+
+### TASK-008: Tier visual primitives + Modal
+- [ ] Status
+- **Files touched:** `src/components/TierBadge.tsx`, `src/components/TierBorder.tsx`, `src/components/Modal.tsx`, `src/components/TierBadge.test.tsx`, `src/components/TierBorder.test.tsx`, `src/components/Modal.test.tsx`.
+- **Depends on:** TASK-006 (`tierVisual` from `src/lib/tiers.ts`).
+- **Acceptance criteria:**
+  1. `TierBadge` and `TierBorder` import `tierVisual` from `src/lib/tiers.ts` and do NOT redefine the mapping. The visual contract (`{ label, borderClass, badgeClass, textClass }` of Tailwind class strings) is owned by TASK-006 and consumed here unchanged.
+  2. `TierBadge` is a function component that accepts `tier: Tier` and renders the `label` from `tierVisual(tier)`. The Tailwind `badgeClass` from `tierVisual(tier)` is passed through `className={...}` (no inline `style`). The rendered element has `role="status"` (or an explicit `aria-label` equal to the label) so colour is not the sole accessibility signal.
+  3. `TierBorder` accepts `tier: Tier` and `children: ReactNode` and renders a wrapper element that applies the `borderClass` from `tierVisual(tier)` via `className={...}` (no inline `style.borderColor` / `style.borderWidth`). Children render inside. The wrapper carries whatever fixed-width Tailwind border utility (e.g. `border-4`) is needed so `borderClass` only contributes the colour.
+  4. `Modal` accepts `open: boolean`, `onClose: () => void`, `title: string`, and `children: ReactNode`. When `open` is false it renders nothing. When `open` is true it renders into a React portal mounted on `document.body` and the dialog element has `role="dialog"` with `aria-modal="true"` and `aria-label` (or `aria-labelledby`) reflecting `title`.
+  5. `Modal` calls `onClose` when the user presses `Escape` and when the backdrop (not the dialog content) is clicked. Clicking inside the dialog content does NOT call `onClose`.
+  6. Tests assert behaviour, not snapshots: `TierBadge` renders the `label` text and exposes the a11y attribute, and the element's `className` contains the exact `badgeClass` string from `tierVisual(tier)` for each tier; `TierBorder` wrapper's `className` contains the exact `borderClass` string from `tierVisual(tier)` for each tier; `Modal` open/closed render, portal target (`document.body`), Escape-key close, backdrop close, content-click does-not-close.
+- **Out of scope:** focus trap (deferred; flag for future a11y pass), animation, stacking multiple modals, redefining or extending `tierVisual` (that lives in TASK-006 / `src/lib/tiers.ts`).
+
+### TASK-009: Review-session store
+- [ ] Status
+- **Files touched:** `src/stores/useReviewSessionStore.ts`, `src/stores/useReviewSessionStore.test.ts`.
+- **Depends on:** TASK-003 (`Rating` type from `src/db/db`). Zustand 5 is already a runtime dependency (installed in TASK-001); no separate Zustand bootstrap task is needed because this store stands alone with no shared store infrastructure.
+- **Acceptance criteria:**
+  1. Exports a Zustand store hook `useReviewSessionStore`. State shape: `{ pageId: string | null; cardIds: string[]; index: number; flipped: boolean; ratings: Record<string, Rating> }`.
+  2. Exports actions on the store: `start(pageId: string, cardIds: string[])`, `flip()`, `rate(rating: Rating)`, `next()`, `reset()`.
+  3. `start` initialises state: `pageId` set, `cardIds` copied, `index = 0`, `flipped = false`, `ratings = {}`. Calling `start` on an already-active session replaces it.
+  4. `flip` toggles `flipped`.
+  5. `rate(r)` records `ratings[cardIds[index]] = r`. It does NOT auto-advance. Calling `rate` when `pageId === null` or `index` is out of bounds is a no-op.
+  6. `next()` advances `index` by 1 and resets `flipped` to `false`. `next()` past the last card leaves `index === cardIds.length` (a sentinel meaning "session done"); further `next()` calls do not increment beyond that.
+  7. `reset()` returns state to the initial empty shape (`pageId: null`, `cardIds: []`, `index: 0`, `flipped: false`, `ratings: {}`).
+  8. The store holds no I/O. It does not touch Dexie, repos, or `Date.now()`. Ratings are persisted as `ReviewEvent`s by the Review route (TASK-012), not by this store.
+  9. Tests exercise actions directly via `useReviewSessionStore.getState()` / `setState` and do not require React rendering.
+- **Out of scope:** persistence to IndexedDB; appending `ReviewEvent`s; keyboard handling (that lives in TASK-012's Review route).
 
 ---
 
@@ -109,7 +161,7 @@
 ### TASK-010: Create a Book (UI)
 - [ ] Status
 - **Files touched:** `src/routes/Dashboard/index.tsx`, `src/routes/Book/NewBook.tsx`, `src/stores/useAppStore.ts`.
-- **Depends on:** TASK-002, TASK-005.
+- **Depends on:** TASK-005, TASK-007.
 - **Acceptance criteria:**
   1. Dashboard shows a "New Book" affordance.
   2. NewBook form fields: name (required), source lang (required), target lang (required), with defaults from settings.
@@ -118,18 +170,18 @@
 
 ### TASK-011: Create a Bronze List + add Cards
 - [ ] Status
-- **Files touched:** `src/routes/Book/index.tsx`, `src/routes/ListDetail/index.tsx`, `src/components/TierBadge.tsx`, `src/components/TierBorder.tsx`, `src/lib/tiers.ts`.
-- **Depends on:** TASK-010.
+- **Files touched:** `src/routes/Book/index.tsx`, `src/routes/ListDetail/index.tsx`.
+- **Depends on:** TASK-008, TASK-010.
 - **Acceptance criteria:**
   1. From a Book overview, the user can create a new Bronze List with an auto-generated title (`Bronze 1`, `Bronze 2`, …).
   2. ListDetail allows adding Cards (source + target) until the user marks the List "Ready" (sets a flag — actually we just set `reviewableAt = createdAt + intervalDays` at creation and lock further edits when `reviewedAt` is set).
-  3. ListDetail displays the tier border and label per PRD §4.
+  3. ListDetail displays the tier border and label per PRD §4, by composing the `TierBadge` and `TierBorder` primitives from TASK-008 (which already consume `tierVisual` from `src/lib/tiers.ts`). This task does not edit `src/lib/tiers.ts` or the components themselves.
   4. Soft warning shown when adding the 26th Card; not blocked.
 
 ### TASK-012: Flashcard Review flow
 - [ ] Status
 - **Files touched:** `src/routes/Review/index.tsx`, `src/components/Flashcard.tsx`, `src/components/RatingButtons.tsx`, `src/stores/useReviewSessionStore.ts`.
-- **Depends on:** TASK-011.
+- **Depends on:** TASK-009, TASK-011.
 - **Acceptance criteria:**
   1. ListDetail for a due List shows "Start Review"; for a not-yet-due List, shows the due date and disables Start Review (Gold has "Review on demand" instead).
   2. Review shows one Card at a time, source side first.
@@ -151,7 +203,7 @@
 ### TASK-014: Distillation Builder
 - [ ] Status
 - **Files touched:** `src/routes/Distill/Builder/index.tsx`, `src/routes/Distill/Builder/AddEntryModal.tsx`, `src/components/Modal.tsx`.
-- **Depends on:** TASK-013.
+- **Depends on:** TASK-008, TASK-013.
 - **Acceptance criteria:**
   1. Two-pane layout per PRD §5.5.
   2. "Add entry" modal: multi-select chips for parent Cards; source and target inputs; **both inputs empty** when the modal opens regardless of parent selection.
