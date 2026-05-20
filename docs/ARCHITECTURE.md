@@ -43,15 +43,18 @@ src/
 │   ├── useAppStore.ts           # current Book, theme
 │   └── useReviewSessionStore.ts # in-flight review state
 ├── routes/
+│   ├── Layout.tsx               # global header/nav shell wrapping <Routes>
 │   ├── Dashboard/
 │   ├── Book/                    # per-Book overview
 │   ├── ListDetail/
 │   ├── Review/                  # flashcard flow
 │   ├── Distill/
 │   │   ├── ReviewSummary/       # post-review flag screen
-│   │   └── Builder/             # next-list builder
+│   │   ├── Builder/             # next-list builder
+│   │   └── GoldSummary/         # read-only end-of-review screen for Gold (no Builder)
 │   ├── Stats/
-│   └── Settings/
+│   ├── Settings/
+│   └── NotFound.tsx             # wildcard catch-all
 ├── components/
 │   ├── TierBadge.tsx
 │   ├── TierBorder.tsx
