@@ -102,7 +102,7 @@ The tier label and the colour border are both required — colour alone is not a
 ### 5.6 On-demand Gold review
 - A Gold List shows a **"Review on demand"** button instead of a due indicator.
 - The Review flow runs identically and records ReviewEvents.
-- At the end, the user lands on a read-only summary screen (no Builder).
+- At the end, the user lands on a read-only **Gold Summary** screen (no flags, no Builder CTA, no archiving). Navigation contract: a non-Gold review ends at the Distillation Review screen; a Gold review ends at the Gold Summary screen instead. These are two distinct destinations — the Gold Summary is never a Builder entry point.
 
 ### 5.7 Dashboard
 - Lists Books, each with a count of due Lists.
