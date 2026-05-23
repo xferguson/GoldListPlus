@@ -168,7 +168,7 @@ Grouped on the Settings page under a section heading **"Backup & restore"** with
 - Triggered by a button labelled **"Export backup"**.
 - Action is instant — no confirmation modal. While the export is being assembled the button is disabled and shows **"Exporting…"**; on completion the browser's normal file-save flow takes over.
 - Filename is deterministic and timestamped: `goldlistplus-backup-YYYYMMDD-HHmmss.json` (UTC, zero-padded). The timestamp lets the user identify which export they are restoring from when multiple files sit in the same folder.
-- After a successful export, an inline status line under the button shows for ~5 seconds: **"Exported N books, M lists, K cards, J reviews."** (Counts are required so the user can sanity-check the export is non-empty when they expected data.)
+- After a successful export, an inline status line under the button shows: **"Exported N books, M lists, K cards, J reviews."** (Counts are required so the user can sanity-check the export is non-empty when they expected data.) The status line persists until the user starts another export/import action — it is not auto-dismissed on a timer. Rationale: a user who steps away from the device must still see the result on return; a silent timeout would lose that confirmation.
 - The file's top-level shape is `{ version, exportedAt, books, pages, cards, reviews }`. `version` is the literal number `1`. `exportedAt` is a Unix epoch millisecond integer captured at export start. Each array contains every row of its table verbatim — no derived fields, no computed flags, no tier counts (Sacred rule #4: one source of truth per fact).
 
 **Import**
