@@ -61,7 +61,8 @@ src/
 │   ├── TierBorder.tsx
 │   ├── Flashcard.tsx
 │   ├── RatingButtons.tsx
-│   └── Modal.tsx
+│   ├── Modal.tsx
+│   └── UpdatePrompt.tsx        # SW update toast (ADR-013)
 └── index.css                    # Tailwind entry
 ```
 
@@ -212,6 +213,14 @@ Notes:
 **Why a pure constants module:** (a) §3 rule 4 says stores hold ephemeral state, not domain constants; (b) `src/lib/**` is the canonical home for pure values and §2 already lists it; (c) when Settings (§5.10) lands and defaults become user-overridable, the override will be stored in IndexedDB (a `settings` table or a `books`-level fallback), not in a Zustand store — the constants in `defaults.ts` become the *fallback* the persisted overrides shadow. No store refactor is forced by that future change. (d) Inlining in NewBook duplicates the values once §5.10 ships.
 **Layering note:** `defaults.ts` may `import type` from `src/db/db.ts` (matches the §2 rule that `src/lib/**` imports types from `db/db.ts`). No runtime imports.
 
+### ADR-013: PWA update flow — autoUpdate registration + user-gated activation via UpdatePrompt
+**Decision:** Keep `registerType: 'autoUpdate'` on `vite-plugin-pwa` and add `src/components/UpdatePrompt.tsx`, a non-blocking toast that consumes the `useRegisterSW` hook from `virtual:pwa-register/react` and calls `updateServiceWorker(true)` only on explicit user click. Mount `<UpdatePrompt/>` once inside `routes/Layout.tsx` so the toast is reachable from every screen but lives outside `<Routes>`.
+**Alternatives considered:** (a) pure auto-update — let Workbox install AND activate the new SW the moment it downloads, refreshing the page automatically; (b) pure manual — `registerType: 'prompt'`, surface the toast and require the user to also remember to hard-refresh; (c) banner instead of toast (top of screen instead of bottom corner).
+**Why this combination:** the two terms `autoUpdate` and "user-gated" sound contradictory but compose cleanly. Under `registerType: 'autoUpdate'`, Workbox precaches the new SW and marks it `waiting` as soon as the browser pulls the new build down, but the new SW does NOT take control of the page until `skipWaiting()` runs. `useRegisterSW` exposes a `needRefresh` boolean (true once a new SW is waiting) and an `updateServiceWorker(reloadPage: boolean)` action that triggers `skipWaiting()` plus an optional `window.location.reload()`. The toast watches `needRefresh`, renders when true, and only calls `updateServiceWorker(true)` when the user clicks the reload button. Pure auto-update violates PRD §5.12 — a silent refresh mid-review wipes the in-memory `useReviewSessionStore` state and discards a half-built Distillation Builder draft. Pure manual loses the benefit of having the new SW already downloaded and ready: the next cold open is instant rather than waiting on the new precache.
+**Dismissal semantics:** the toast's dismiss button hides the toast for the current session WITHOUT calling `updateServiceWorker`. The waiting SW stays waiting; the next cold open lets Workbox activate it normally (which is the default `skipWaiting` behaviour on next navigation). Dismissal therefore costs the user nothing — they just defer the prompt.
+**Implementation pointers:** the import path is `virtual:pwa-register/react` (literally — it is a virtual module supplied by `vite-plugin-pwa`; the implementer must add `vite-plugin-pwa/client` to `compilerOptions.types` in `tsconfig.app.json` for TypeScript to see the module declaration). `useRegisterSW({ onRegisteredSW, onRegisterError })` returns `{ needRefresh: [boolean, setter], updateServiceWorker: (reload?: boolean) => Promise<void> }`. The toast's QA contract is testable without a real SW by mocking the module with `vi.mock('virtual:pwa-register/react', () => ({ useRegisterSW: () => ({ needRefresh: [true, vi.fn()], updateServiceWorker: vi.fn() }) }))` and asserting the component's behaviour against the mocked return values.
+**Dependency impact:** none. `vite-plugin-pwa` already ships `virtual:pwa-register/react`; no new runtime dependency is needed and §8 ledger is unchanged.
+
 ## 6. Cross-cutting rules
 
 - TypeScript `strict: true`, `noUncheckedIndexedAccess: true`, `noImplicitOverride: true`.
@@ -253,6 +262,7 @@ Line counts include code and comments but exclude trailing blank lines.
   - `manifest.scope` and `manifest.start_url` both set to the base path.
   - `workbox.navigateFallback: 'index.html'` so deep hash routes hydrate.
 - `public/.nojekyll` to disable Jekyll on Pages.
+- Update activation is user-gated via `src/components/UpdatePrompt.tsx` (ADR-013). `registerType: 'autoUpdate'` precaches the new SW; the toast triggers `skipWaiting` only on explicit user click. No silent mid-session reloads.
 
 ## 8. Dependency ledger
 
