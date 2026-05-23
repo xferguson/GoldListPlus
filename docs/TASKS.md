@@ -160,13 +160,79 @@
 
 ### TASK-010: Create a Book (UI)
 - [ ] Status
-- **Files touched:** `src/routes/Dashboard/index.tsx`, `src/routes/Book/NewBook.tsx`, `src/stores/useAppStore.ts`.
+- **Files touched:** `src/App.tsx` (add `/book/new` route entry, registered **before** `/book/:bookId`), `src/routes/Dashboard/index.tsx`, `src/routes/Book/NewBook.tsx`, `src/lib/defaults.ts`, `src/stores/useAppStore.ts`. Tests: `src/routes/Dashboard/Dashboard.test.tsx`, `src/routes/Book/NewBook.test.tsx`, `src/lib/defaults.test.ts`, `src/stores/useAppStore.test.ts`.
 - **Depends on:** TASK-005, TASK-007.
+- **Architectural notes (tech-lead decisions):**
+  - **Routing:** NewBook is reached via a dedicated route `/book/new` (ADR-008 amendment). It is NOT a modal on the Dashboard. The Dashboard renders a `<Link to="/book/new">` affordance. Modal-based flows wait until the `Modal` primitive ships in TASK-008.
+  - **Defaults location:** App-wide `BookSettings` defaults live in `src/lib/defaults.ts` as the exported constant `DEFAULT_BOOK_SETTINGS` (see ADR-012). `BOOK_NAME_MAX_LENGTH = 80` also lives there. NewBook imports both directly. `useAppStore` does NOT hold defaults.
+  - **`useAppStore` shape for TASK-010 (minimum viable):**
+    ```ts
+    type AppState = {
+      currentBookId: string | null;
+      setCurrentBookId: (id: string | null) => void;
+    };
+    ```
+    No theme, no settings, no repo wrappers. The NewBook submit handler sets `currentBookId` to the new Book's id **immediately before** `navigate('/book/:bookId')` so downstream routes (TASK-011, TASK-016) can read "the Book the user just created" without a repo round-trip. The store grows in later tasks; do not pre-add fields.
+  - **Repo access:** `NewBook.tsx` imports `* as books from '../../db/repos/books'` and calls `books.create(...)` directly. This is permitted by §3 rule 1 (UI imports repos). `useAppStore` does NOT wrap repo calls.
+  - **Field labels and DOM contracts** (locked so QA can write mutation-survivable tests; Implementer must match exactly):
+    - Dashboard affordance: an `<a>` / `<Link>` with accessible name **"New Book"** and `href` resolving to `#/book/new` under HashRouter. Test selector: `screen.getByRole('link', { name: /new book/i })`.
+    - NewBook root: `<main data-testid="route-new-book">` containing an `<h1>` "New Book".
+    - Form element: `<form aria-label="New Book">` (or `getByRole('form', { name: /new book/i })`).
+    - Inputs (use `<label htmlFor>` association so `getByLabelText` resolves):
+      - Name: `<label>Name</label>` → `<input name="name" id="name" maxLength={80}>` — selector `getByLabelText(/^name$/i)`.
+      - Source language: `<label>Source language</label>` → `<input name="sourceLang" id="sourceLang">` — selector `getByLabelText(/source language/i)`.
+      - Target language: `<label>Target language</label>` → `<input name="targetLang" id="targetLang">` — selector `getByLabelText(/target language/i)`.
+    - Submit button: `<button type="submit">Create Book</button>` — selector `getByRole('button', { name: /create book/i })`.
+    - Inline error elements (rendered only when invalid; each linked to its input via `aria-describedby`):
+      - `<p data-testid="error-name" role="alert">Name is required</p>` when name (post-trim) is empty after a submit attempt or blur.
+      - `<p data-testid="error-sourceLang" role="alert">Source language is required</p>` analogously.
+      - `<p data-testid="error-targetLang" role="alert">Target language is required</p>` analogously.
+    - When the name is non-empty but exceeds `BOOK_NAME_MAX_LENGTH` after trim, the error text is `"Name must be 80 characters or fewer"`. (Note: the `maxLength={80}` attribute prevents typing past 80 in most browsers; the explicit check is a belt-and-braces defence and exercises the trim path.)
 - **Acceptance criteria:**
-  1. Dashboard shows a "New Book" affordance.
-  2. NewBook form fields: name (required), source lang (required), target lang (required), with defaults from settings.
-  3. Submit creates a Book and routes to the Book overview.
-  4. Validation surfaces missing required fields inline.
+  1. **Dashboard affordance.**
+     - `routes/Dashboard/index.tsx` renders an element accessible as `getByRole('link', { name: /new book/i })`.
+     - The link's `href` ends with `#/book/new` (HashRouter form). Asserted via `.getAttribute('href')`.
+     - Clicking the link (in a `MemoryRouter` test mounted on `/`) causes the matching NewBook route to render — asserted by `getByTestId('route-new-book')` being present after the click.
+  2. **NewBook route registration.**
+     - `App.tsx` registers `<Route path="/book/new" element={<NewBook />}>` **before** `<Route path="/book/:bookId" element={<Book />}>`. Asserted by mounting `<MemoryRouter initialEntries={['/book/new']}>` and confirming `getByTestId('route-new-book')` renders and `queryByTestId('route-book')` does NOT.
+     - A second test asserts `<MemoryRouter initialEntries={['/book/abc123']}>` still renders `getByTestId('route-book')` and not `route-new-book` (the param route is not eaten).
+  3. **Form initial state — all fields empty.**
+     - On render, `getByLabelText(/^name$/i)` has `value === ''`.
+     - On render, `getByLabelText(/source language/i)` has `value === ''`.
+     - On render, `getByLabelText(/target language/i)` has `value === ''`.
+     - None of `error-name`, `error-sourceLang`, `error-targetLang` is in the DOM (no pre-submit errors).
+  4. **Submit-blocked validation, with inline errors.**
+     - With all three fields empty, clicking Create Book does NOT call `books.create` (asserted by spying on the repo module; zero calls) and does NOT navigate (the URL stays on `/book/new`).
+     - After that submit attempt, all three of `error-name`, `error-sourceLang`, `error-targetLang` are present in the DOM with the exact text strings listed above.
+     - With only `name` filled and the language fields empty, submit is still blocked; `error-name` is absent, but `error-sourceLang` and `error-targetLang` are present.
+     - Typing into a field that has an error clears that field's error element on the next `change` (or blur of a now-non-empty field), without affecting the other fields' errors.
+     - A name consisting only of whitespace (e.g. `"   "`) is treated as empty: `error-name` appears on submit, and `books.create` is not called.
+     - A name longer than 80 characters after trim shows `error-name` with text `"Name must be 80 characters or fewer"` and blocks submit.
+  5. **Successful submit persists with defaults and navigates.**
+     - When all three fields contain non-empty trimmed strings (e.g. `"  Japanese  "`, `"en"`, `"ja"`), clicking Create Book calls `books.create` exactly once with an object that:
+       - has a `string` `id` of length 26 (ULID — assertion: matches `/^[0-9A-HJKMNP-TV-Z]{26}$/`),
+       - has `name === 'Japanese'` (trimmed),
+       - has `sourceLang === 'en'` and `targetLang === 'ja'` (each trimmed; no format validation applied — `"foo-bar-baz"` is accepted),
+       - has `createdAt` of type `number` and `> 0`,
+       - has `settings` **deeply equal** to `DEFAULT_BOOK_SETTINGS` from `src/lib/defaults.ts` (`distillationIntervalDays: 14`, `headlistSize: 25`, `autoDropOnHard: false`, `autoDropOnModerate: true`, `autoDropOnEasy: true`).
+     - After the awaited `books.create` resolves, the test asserts navigation to `/book/<that-same-id>`. Tested by reading `useLocation()` inside a sibling probe component or by checking the `MemoryRouter`'s test history.
+     - After the navigation, `useAppStore.getState().currentBookId === <that-same-id>`.
+     - If `books.create` rejects (mocked), the form does NOT navigate, the inputs retain their values, and an `error-submit` element with `role="alert"` is rendered. (The exact copy is implementer's choice; the test only asserts the element appears.)
+  6. **`src/lib/defaults.ts` shape and purity.**
+     - Exports a named const `DEFAULT_BOOK_SETTINGS: BookSettings` with the literal values above. Asserted by deep equality.
+     - Exports a named const `BOOK_NAME_MAX_LENGTH = 80`.
+     - Source-level scan asserts `defaults.ts` contains no `import` from `react`, `react-dom`, `react-router-dom`, `zustand`, `dexie`, or any path under `../db/repos/` — matches the §3 rule 2 purity requirement (type-only import from `../db/db` is permitted).
+  7. **`src/stores/useAppStore.ts` shape and purity.**
+     - Exports `useAppStore` whose `getState()` returns `{ currentBookId: null, setCurrentBookId: <function> }` on first read.
+     - Calling `useAppStore.getState().setCurrentBookId('abc')` makes `useAppStore.getState().currentBookId === 'abc'`. Calling it with `null` resets.
+     - Source-level scan asserts `useAppStore.ts` contains no `import` from `dexie`, `../db/db`, or `../db/repos/` (the store has no I/O; repo calls happen in the route).
+- **Out of scope:**
+  - Book edit / delete UI (separate later task).
+  - BCP-47 format validation on language inputs (PRD §5.1 explicitly defers this).
+  - Persisting `currentBookId` across reloads (Zustand `persist` middleware is not introduced here; on refresh the value resets to `null`).
+  - A `theme` slice on `useAppStore` (defer until needed).
+  - Adding a Settings-table override of `DEFAULT_BOOK_SETTINGS` (waits for §5.10 / TASK-018+).
+  - The Book overview page content itself (TASK-011 / TASK-016 own that).
 
 ### TASK-011: Create a Bronze List + add Cards
 - [ ] Status
