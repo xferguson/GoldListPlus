@@ -453,15 +453,157 @@
   3. Activity heatmap across all Books.
   4. Empty-state copy when there's no data yet.
 
-### TASK-018: Export / Import JSON
-- [ ] Status
-- **Files touched:** `src/lib/sync/exportImport.ts`, `src/lib/sync/exportImport.test.ts`, `src/routes/Settings/index.tsx`.
+### TASK-018: Export / Import JSON (Backup & restore)
+- [✓] Status — complete (2026-05-23). QA Engineer wrote two test files covering all 13 AC: `src/lib/sync/exportImport.test.ts` (504 non-blank lines — over the 400 soft target, under the 600 hard cap; the file carries the four pure helpers plus the Dexie round-trip / idempotency / collision / unrelated-rows / FK-rollback / mid-write rollback suites against `fake-indexeddb`) and `src/routes/Settings/Settings.test.tsx` (329 non-blank lines — under the 400 soft target; covers the full Settings UI flow including export happy path with `URL.createObjectURL` spy, four parse-error sub-cases, FK-violation early abort, and confirm-cancel branch). Implementer made them pass with: `src/lib/sync/exportImport.ts` (98 non-blank lines — well under the 150 soft / 200 hard `src/lib/**` cap; four pure exports `buildExportEnvelope`, `formatExportFilename`, `parseExport`, `validateForeignKeys` plus the three exported types `ExportEnvelope`, `ImportError`, `ParseResult`; type-only import from `db/db`); `src/routes/Settings/syncActions.ts` (59 non-blank lines, new file — exports `runImportTransaction`, `collectDbIds`, `readNonBookRows`; the only new direct importer of `src/db/db.ts` in the diff, permitted by ADR-017's full-table-read carve-out for the Settings route caller); `src/routes/Settings/index.tsx` (212 non-blank lines — under the 250 soft / 350 hard route cap; replaces the 6-line placeholder with the full Backup-and-restore section, error dispatch via the `errorCopy` switch over the discriminated `ImportError` union, hidden file input pattern, confirm `Modal` integration); plus a small tweak to `vite.config.ts` and `vitest.setup.ts` (config files, uncapped). Code Reviewer approved; second-pass QA approved. Second-pass Tech Lead audit clean: **ADR-017 honoured** — `exportImport.ts` contains no `Dexie` / `Date.now(` / `window.` / `document.` references (grep-confirmed), the only `Date` use is `new Date(exportedAt)` inside `formatExportFilename` (an injected timestamp, not a clock call — explicitly permitted by ADR-017); the Settings route's `handleExport` reads `Date.now()` once and passes the same value to both `buildExportEnvelope` and `formatExportFilename` (envelope timestamp and filename timestamp derived from one instant, per the ADR's "exportedAt provenance" paragraph); the import transaction lives in `syncActions.ts` (`runImportTransaction`) and wraps a single `db.transaction('rw', [db.books, db.pages, db.cards, db.reviews], ...)` over all four tables exactly as the ADR locks. §3 layering intact — `syncActions.ts` is the **only** new direct value-importer of `src/db/db.ts` in the diff (verified by grep across `src/`); all other modules continue to use `import type` from `db/db` or go through repos. The `db` value import in `syncActions.ts` is limited to the three documented uses: (a) `db.transaction(...)` for the atomic import, (b) `.toCollection().primaryKeys()` on the four tables for `collectDbIds`, (c) `.toArray()` on the three non-book tables for `readNonBookRows`; the export-side `books.list()` call still goes through the `books` repo, so the carve-out is held to the minimum the ADR contemplates (full-table reads + the atomic transaction). §6 file-size discipline clear: every production file under its bucket's hard cap (largest is `Settings/index.tsx` at 212 lines vs 350 hard); both test files under the 600 hard cap (504 and 329); no `// rationale-for-size` comment required because only the hard cap is a kickback threshold. §8 dependency ledger unchanged — `package.json` `dependencies` and `devDependencies` blocks are byte-identical to `origin/main` (no new runtime or dev dep — `Blob`, `URL.createObjectURL`, `File.text()`, `JSON.parse`/`JSON.stringify` are all browser-provided; `fake-indexeddb` was already installed in TASK-003). ADR registry hygiene clean — ADRs 001-017 are in correct numeric order with no duplicates or gaps (verified by grep on `^### ADR-` headers); ADR-017 is the renumbered draft-013 from the merge and is referenced from §3 rule 2 and the §2 module map's `sync/` block. PRD §8 sacred rules untouched: rule #1 (distillation is manual rewriting — no Builder code changed); rule #2 (`wrong` always flagged — no `flagCardForDistillation` change); rule #3 (Gold is terminal — the round-trip test in `exportImport.test.ts` AC-5 explicitly preserves `reviewableAt: null` on a Gold page through serialise → clear → restore, so a regression that coerces `null` to `0` via `?? 0` would fail); rule #4 (one source of truth — the import uses `db.*.put(row)` which writes rows verbatim with `archivedAt` / `parentIds` preserved, no derived state collapse); rule #5 (no backend — export is a local `Blob` download, import is a local `File.text()` read, no `fetch`/`XMLHttpRequest`/`WebSocket` introduced). ARCHITECTURE.md §2 module map amended in this pass to note `Settings/` now contains `index.tsx + syncActions.ts (Dexie I/O for export/import, ADR-017)`, mirroring the TASK-011 style of listing route-local non-route files inline. No new file outside the original `Files touched` block — `syncActions.ts` was a tech-lead-anticipated extraction (the ADR-017 paragraph "see §2 module map for the chosen path" pre-authorised it). Forward note for TASK-019 (File System Access pinned-file sync): `syncActions.ts` is the natural home for the pinned-file write loop too — extend it with `writeToPinnedHandle(handle, envelope)` rather than reaching into Dexie from `src/lib/sync/fileHandle.ts`. The pure-vs-I/O split established by ADR-017 should hold: `fileHandle.ts` owns the FSA `showOpenFilePicker` / `getFileHandle` plumbing (the one `window` carve-out in `src/lib/sync/*`); `syncActions.ts` owns the Dexie reads that feed the pinned-file write; the existing `buildExportEnvelope` is reused unchanged. Forward note for TASK-020 (Notifications): the Settings route at 212 lines has ~138 lines of headroom before the 350 hard cap, so the "Enable reminders" affordance plus iOS-limitation copy can land in the same file without an extraction — only if the file crosses 250 should the implementer split the reminders section into a sibling component. Forward note for any future schema-version bump (`version: 2` envelope): `parseExport`'s `newer-version` branch already returns the rejected version number in the error tuple, so a future migration path can read it and offer to "downgrade" or refuse cleanly; do not collapse the error union into a single generic message when adding version 2.
+- **Files touched:** `src/lib/sync/exportImport.ts`, `src/lib/sync/exportImport.test.ts`, `src/routes/Settings/index.tsx`, `src/routes/Settings/Settings.test.tsx`, `src/routes/Settings/syncActions.ts` (new, ADR-017 — Dexie I/O for the Settings route's export/import flow; the only new direct importer of `src/db/db.ts` in the diff). The Settings test file may also import `fake-indexeddb/auto` and the repos to assert the import transaction's effects on real Dexie. No new npm dependencies (`Blob`, `URL.createObjectURL`, `File.text()`, `JSON.parse`/`JSON.stringify` are all browser-provided; `fake-indexeddb` is already a dev dep from TASK-003).
 - **Depends on:** TASK-005.
+- **Architectural notes (tech-lead decisions):**
+  - **Module layering (ADR-017).** `src/lib/sync/exportImport.ts` is **pure** — no Dexie, no `window`, no `Date.now()`. Four named exports: `buildExportEnvelope`, `formatExportFilename`, `parseExport`, `validateForeignKeys`. All Dexie I/O lives in the Settings route. The previous draft of the `src/lib/**` purity rule (§3 rule 2) is amended to explicitly mention this file alongside `fileHandle.ts`.
+  - **Envelope shape (locked).** The exported JSON has exactly these top-level keys, in this order, with no other keys present:
+    ```ts
+    type ExportEnvelope = {
+      version: 1;             // literal number
+      exportedAt: number;     // Unix epoch ms, integer
+      books: Book[];
+      pages: Page[];
+      cards: Card[];
+      reviews: ReviewEvent[];
+    };
+    ```
+    `version` is the literal number `1` (NOT a string `"1"`). Row arrays contain rows **verbatim** as they live in Dexie — no field renaming, no computed flags, no tier counts, no `notes`. Optional fields that happen to be `undefined` on a given row are omitted by `JSON.stringify` (this is the standard browser behaviour and is the intended contract — re-importing the file recreates the row with the same `undefined` semantics).
+  - **`buildExportEnvelope` signature.**
+    ```ts
+    function buildExportEnvelope(input: {
+      books: Book[]; pages: Page[]; cards: Card[]; reviews: ReviewEvent[]; exportedAt: number;
+    }): ExportEnvelope;
+    ```
+    Returns a fresh object whose row arrays are the **same references** as the inputs (no defensive copy — pure transform, the caller owns the arrays). Sets `version: 1` and copies `exportedAt` through unchanged.
+  - **`formatExportFilename` signature.**
+    ```ts
+    function formatExportFilename(exportedAt: number): string;
+    ```
+    Returns `goldlistplus-backup-${YYYY}${MM}${DD}-${HH}${mm}${ss}.json` where every component is the UTC value of `exportedAt`, zero-padded to two digits (four for year). Uses `Date.prototype.getUTC*` methods on a `new Date(exportedAt)` — this is the one permitted `Date` use in `src/lib/**` because it is a pure derivation from an injected timestamp, not a call to the real clock.
+  - **`parseExport` signature and error union.**
+    ```ts
+    type ImportError =
+      | { kind: 'invalid-json' }
+      | { kind: 'not-a-backup' }
+      | { kind: 'newer-version'; version: number };
+    type ParseResult =
+      | { ok: true; envelope: ExportEnvelope }
+      | { ok: false; error: ImportError };
+    function parseExport(input: unknown): ParseResult;
+    ```
+    `parseExport` itself never throws. The caller passes in the result of `JSON.parse(text)` wrapped in try/catch — if `JSON.parse` throws, the caller fabricates `{ ok: false, error: { kind: 'invalid-json' } }` directly (so `parseExport`'s implementation does not need to handle string input). `parseExport`'s job is to validate the parsed `unknown`:
+    - if `input` is not a non-null object → `{ kind: 'not-a-backup' }`
+    - if `input.version` is missing OR not a number → `{ kind: 'not-a-backup' }`
+    - if `input.version` is a number and equals `1` → continue
+    - if `input.version` is a number and is NOT `1` (whether smaller or larger; v1 ships with only one version, so any other number is "newer" from this build's perspective) → `{ kind: 'newer-version', version: input.version }`
+    - if `exportedAt` is missing or not a finite number → `{ kind: 'not-a-backup' }`
+    - if any of `books`, `pages`, `cards`, `reviews` is missing or not an array → `{ kind: 'not-a-backup' }`
+    - otherwise → `{ ok: true, envelope }` where `envelope` is a narrowed view of the input. No per-row shape validation in v1: row keys are trusted (a corrupt file may write malformed rows; idempotent re-export and the lack of a backend mean this is an acceptable surface for v1).
+  - **`validateForeignKeys` signature.**
+    ```ts
+    function validateForeignKeys(
+      envelope: ExportEnvelope,
+      dbIds: { bookIds: ReadonlySet<string>; pageIds: ReadonlySet<string>; cardIds: ReadonlySet<string> }
+    ): { ok: true } | { ok: false; error: { kind: 'fk-missing' } };
+    ```
+    Validation order (locked so QA can write a single ordered test):
+    1. Build effective id sets: `bookIds = new Set([...dbIds.bookIds, ...envelope.books.map(b => b.id)])`; analogous for `pageIds` (DB pages + file pages) and `cardIds`.
+    2. For each `Page` in `envelope.pages`, in array order: if `bookIds.has(page.bookId) === false`, return `{ ok: false, error: { kind: 'fk-missing' } }`.
+    3. For each `Card` in `envelope.cards`, in array order: if `bookIds.has(card.bookId) === false` OR `pageIds.has(card.pageId) === false`, return `{ ok: false, error: { kind: 'fk-missing' } }`.
+    4. For each `ReviewEvent` in `envelope.reviews`, in array order: if `cardIds.has(ev.cardId) === false` OR `pageIds.has(ev.pageId) === false`, return `{ ok: false, error: { kind: 'fk-missing' } }`.
+    5. Otherwise → `{ ok: true }`.
+    `Page.parentPageId`, `Page.childPageId`, and `Card.parentIds` are NOT validated — see ADR-017 for the reason.
+  - **Import transaction shape (locked).** The Settings route runs:
+    ```ts
+    await db.transaction('rw', [db.books, db.pages, db.cards, db.reviews], async () => {
+      for (const row of envelope.books)   { if ((await db.books.get(row.id))   !== undefined) overwritten++; await db.books.put(row); }
+      for (const row of envelope.pages)   { if ((await db.pages.get(row.id))   !== undefined) overwritten++; await db.pages.put(row); }
+      for (const row of envelope.cards)   { if ((await db.cards.get(row.id))   !== undefined) overwritten++; await db.cards.put(row); }
+      for (const row of envelope.reviews) { if ((await db.reviews.get(row.id)) !== undefined) overwritten++; await db.reviews.put(row); }
+    });
+    ```
+    Tables included in the transaction lock: **all four**, every time, regardless of which rows the file contains (so a file with only `reviews` still takes the books/pages/cards locks and a concurrent mutation cannot race). Throwing inside the body rolls back every table — QA writes a rollback test by forcing one of the `put` calls to throw mid-loop and asserting no row from any table was written.
+  - **`exportedAt` provenance.** §3 rule 6 forbids `Date.now()` inside `src/lib/**`. The Settings route reads `Date.now()` once at the start of an export and passes the same value to both `buildExportEnvelope({ ..., exportedAt })` and `formatExportFilename(exportedAt)` — the filename's timestamp and the envelope's `exportedAt` are derived from one instant.
+  - **Status counts (locked phrasing).** Counts are computed from the envelope arrays themselves (`envelope.books.length`, etc.), NOT from the post-write DB state. This makes them honest to the file the user just exported / imported.
+    - Export success line: `"Exported {B} books, {L} lists, {C} cards, {R} reviews."` — exact substitution, no Oxford comma omitted, no pluralisation toggle (`1 books` is acceptable for v1).
+    - Import confirm modal body: `"Import {B} books, {L} lists, {C} cards, {R} reviews? Existing entries with matching IDs will be overwritten. Other data on this device is kept."`
+    - Import success line: `"Imported {B} books, {L} lists, {C} cards, {R} reviews ({X} overwritten)."`
+  - **DOM contracts (locked so QA can write mutation-survivable assertions; implementer must match exactly).** Mirrors the TASK-010 contract style:
+    - Section heading: `<h2>Backup & restore</h2>` inside the Settings route (`route-settings` testid stays on the existing `<main>`). Selector `screen.getByRole('heading', { level: 2, name: /backup & restore/i })`.
+    - Helper copy: `<p>` containing the exact PRD §5.10.1 string `"Your data never leaves your device unless you export it. Use Export to make a backup, and Import to restore one on this or another device."`
+    - Export button: `<button type="button">Export backup</button>` — selector `getByRole('button', { name: /^export backup$/i })`. While exporting: `disabled` and text becomes exactly `"Exporting…"` (with the ellipsis character `…`, not three dots).
+    - Import button: `<button type="button">Import backup</button>` — selector `getByRole('button', { name: /^import backup$/i })`. Clicking it activates a hidden `<input type="file" accept="application/json,.json" data-testid="import-file-input">` (testid is the test handle; the visible affordance is the button, the input is `sr-only` or `display:none`).
+    - Status line (export and import success): `<p data-testid="sync-status" role="status">{exact string above}</p>`. Single element reused; cleared after ~5s (timer not asserted — only its presence after the action). QA may assert presence using the exact string and absence before the action.
+    - Error element: `<p data-testid="sync-error" role="alert">{exact string per case}</p>`. The error strings are exactly the PRD §5.10.1 copy:
+      - `kind === 'invalid-json'` → `"That file isn't valid JSON. Pick an exported backup file."`
+      - `kind === 'not-a-backup'` → `"That file isn't a Gold List Plus backup."`
+      - `kind === 'newer-version'` → `"This backup was made by a newer version of Gold List Plus. Update the app and try again."`
+      - `kind === 'fk-missing'` → `"This backup is missing data it depends on (e.g. a list whose book isn't included). Nothing was imported."`
+    - Confirm modal: uses `Modal` from `src/components/Modal.tsx` (TASK-008). `title="Confirm import"`. Body is the locked confirm copy above. Footer has `<button>Cancel</button>` and `<button>Import</button>` — selectors `getByRole('button', { name: /^cancel$/i })` and `getByRole('button', { name: /^import$/i })` (the second button must be scoped within the modal to avoid colliding with the outer "Import backup" trigger; QA can scope with `within(screen.getByRole('dialog'))`).
+  - **File-size discipline.** `src/lib/sync/exportImport.ts` is expected to land around the §6 `src/lib/**` 150-line soft target (four small pure functions). If it nears 200 lines, split filename/format into `src/lib/sync/exportImport/filename.ts` rather than relax the cap. The Settings route is allowed to grow up to the 250-line soft target before considering extraction; if both Export and Import handlers push past 350 lines, extract a `Settings/useSyncActions.ts` hook (out of scope for v1 unless triggered).
+  - **No new dependencies.** Verified against `package.json`: `Blob`, `URL.createObjectURL`, `File.text()`, `JSON.parse`/`JSON.stringify` are browser-provided; `fake-indexeddb` is already installed. ARCHITECTURE.md §8 unchanged.
 - **Acceptance criteria:**
-  1. Export produces a JSON object with `version: 1`, `exportedAt`, and arrays of all books, pages, cards, reviews.
-  2. Import is idempotent: re-importing the same file twice leaves the DB unchanged after the second import.
-  3. Import preserves IDs; collisions are upserts.
-  4. Settings page exposes Export (download) and Import (file picker) buttons.
+  1. **`buildExportEnvelope` produces the locked envelope shape.** Given fixture arrays for all four tables and a fixed `exportedAt = 1_700_000_000_000`, the returned object satisfies:
+     - `Object.keys(env)` deep-equals `['version', 'exportedAt', 'books', 'pages', 'cards', 'reviews']` (exact order).
+     - `env.version === 1` (strictly the number `1`, asserted with `Object.is`).
+     - `env.exportedAt === 1_700_000_000_000`.
+     - `env.books`, `env.pages`, `env.cards`, `env.reviews` are reference-equal (`===`) to the input arrays (no defensive copy).
+     - `JSON.parse(JSON.stringify(env))` round-trips to a deep-equal value (no `undefined` top-level fields, no `Date` objects, no functions). Mutation trap: an implementer that wraps any row in a defensive `structuredClone` would change the reference check; one that hardcodes `version` as a string would fail the `Object.is(..., 1)` check.
+  2. **`formatExportFilename` is deterministic and UTC.** For `exportedAt = Date.UTC(2026, 4, 23, 7, 8, 9)` (note: month is 0-indexed → May), the function returns exactly `"goldlistplus-backup-20260523-070809.json"`. A second call with `Date.UTC(2026, 0, 1, 0, 0, 0)` returns `"goldlistplus-backup-20260101-000000.json"` (zero-pad). A third call with a value picked to land on a different local timezone offset returns the same string regardless of the test runner's `TZ`. Mutation trap: an implementer using `getMonth` instead of `getUTCMonth` would fail the TZ test.
+  3. **`parseExport` returns the correct discriminated error for each malformed input.** Eight cases, each a separate test:
+     - `parseExport(null)` → `{ ok: false, error: { kind: 'not-a-backup' } }`.
+     - `parseExport('a string')` → `{ kind: 'not-a-backup' }`.
+     - `parseExport({})` (no `version`) → `{ kind: 'not-a-backup' }`.
+     - `parseExport({ version: '1', exportedAt: 1, books: [], pages: [], cards: [], reviews: [] })` (string version) → `{ kind: 'not-a-backup' }`.
+     - `parseExport({ version: 2, exportedAt: 1, books: [], pages: [], cards: [], reviews: [] })` → `{ kind: 'newer-version', version: 2 }`.
+     - `parseExport({ version: 1, exportedAt: 'now', books: [], pages: [], cards: [], reviews: [] })` → `{ kind: 'not-a-backup' }`.
+     - `parseExport({ version: 1, exportedAt: 1, books: [], pages: [], cards: [] })` (missing `reviews`) → `{ kind: 'not-a-backup' }`.
+     - `parseExport({ version: 1, exportedAt: 1, books: [], pages: [], cards: [], reviews: 'oops' })` (`reviews` not an array) → `{ kind: 'not-a-backup' }`.
+     - Plus a positive case: `parseExport({ version: 1, exportedAt: 1, books: [], pages: [], cards: [], reviews: [] })` → `{ ok: true, envelope: <same shape> }`. Mutation trap: an implementer who collapses all error branches into a generic message would fail the kind discrimination; one who treats `version === 0` as valid would fail the newer-version case.
+  4. **`validateForeignKeys` returns `ok: true` only when every reference resolves; otherwise returns the FK error in the locked order.** Four cases:
+     - File contains a Book `b1` and a Page `p1` with `bookId: 'b1'`; DB is empty → `ok: true`.
+     - File contains a Page `p1` with `bookId: 'missing'`; DB contains no Book `'missing'` → `{ kind: 'fk-missing' }`.
+     - File contains a Page `p1` with `bookId: 'b1'` (no Book in file); DB contains Book `'b1'` → `ok: true` (DB resolves the reference).
+     - File contains a Card with `pageId: 'p-missing'` while Pages section is empty → `{ kind: 'fk-missing' }`.
+     - File contains a ReviewEvent with `cardId: 'c-missing'` while Cards section is empty → `{ kind: 'fk-missing' }`.
+     - File contains a Card whose `parentIds: ['ghost']` references a non-existent Card → `ok: true` (parentIds are NOT validated in v1). Mutation trap: an implementer who validates `parentIds` would fail this case; one who skips the ReviewEvent loop would fail the fifth.
+  5. **Round-trip integrity through Dexie (the import-then-export test).** Setup: seed Dexie via repos with two Books, three Pages, eight Cards, twelve ReviewEvents (realistic mix including one Gold page with `reviewableAt: null`, one archived Card with `archivedAt: <ts>`, and one Page with `parentPageId`/`childPageId` set). Run: (a) read all rows via repos, build an envelope, serialise to JSON string, (b) clear Dexie, (c) parse the JSON string, validate FKs against the empty DB, run the locked import transaction. Assert: every table's row count post-import equals the pre-export count; every row deep-equals the original (including `reviewableAt: null` on the Gold page, `archivedAt` on the archived Card, and the parent/child links). Mutation trap: an implementer who skips one table in the transaction loop would lose those rows; one who serialises `reviewableAt: null` as `0` (e.g. via `?? 0`) would corrupt the Gold page.
+  6. **Idempotency: importing the same file twice is a no-op semantically.** Seed empty Dexie; import a fixture file (counts: 2/3/8/12). Assert success status reports `"Imported 2 books, 3 lists, 8 cards, 12 reviews (0 overwritten)."` Re-import the **same** file. Assert (a) the second success status reports `"... (25 overwritten)."` (every row was already present and was replaced — 2+3+8+12=25); (b) reading every row via repos post-second-import deep-equals the first-import state. Mutation trap: an implementer who uses `add` instead of `put` would throw "Key already exists" on the second import.
+  7. **Collision policy: file row wins, fully, no field merge.** Seed Dexie with a Book `{ id: 'b1', name: 'Original', sourceLang: 'en', targetLang: 'ja', settings: { distillationIntervalDays: 14, headlistSize: 25, autoDropOnHard: false, autoDropOnModerate: true, autoDropOnEasy: true }, createdAt: 1000 }`. Import a file whose `books` array contains `{ id: 'b1', name: 'Replaced', sourceLang: 'fr', targetLang: 'de', settings: { distillationIntervalDays: 7, headlistSize: 20, autoDropOnHard: true, autoDropOnModerate: false, autoDropOnEasy: false }, createdAt: 2000 }`. After import, `books.get('b1')` deep-equals the file's row exactly — every field replaced, including `createdAt` and the whole `settings` block. Mutation trap: an implementer who does `{ ...db, ...file }` field merge would leave `createdAt: 1000` and would fail this assertion.
+  8. **Unrelated rows survive import.** Seed Dexie with Book `'b-keep'` and Book `'b-overwrite'`. Import a file whose `books` array contains only `'b-overwrite'`. After import, `books.get('b-keep')` still exists with unchanged content; `books.get('b-overwrite')` is the file's version. Same property tested for one page row and one card row. Mutation trap: an implementer who `clear()`s tables before `put`ing the file's rows would lose `'b-keep'`.
+  9. **FK violation aborts before any write (rollback).** Seed Dexie empty. Construct a file whose `pages` array contains a Page with `bookId: 'ghost'` (not in DB, not in file). Trigger the import via the Settings UI. Assert: (a) the confirm modal does NOT appear (validation happens before confirm); (b) `sync-error` element renders with the FK-missing copy; (c) `books.toArray()` / `pages.toArray()` / `cards.toArray()` / `reviews.toArray()` all return `[]` — no row from any table was written. Mutation trap: an implementer who runs `validateForeignKeys` inside the transaction instead of before the modal would still produce a correct user-visible outcome but would either (a) leak the confirm modal, or (b) take the write lock unnecessarily — this AC pins the order.
+ 10. **Transaction rollback on mid-write error.** Construct an envelope where the third Card row triggers a `put` rejection (test scaffolding: spy on `db.cards.put` and reject on the third call). Run the import. Assert: the import surfaces an error to the user, AND `books.toArray().length === 0`, `pages.toArray().length === 0`, `cards.toArray().length === 0`, `reviews.toArray().length === 0` — every prior `put` inside the same transaction is rolled back. Mutation trap: an implementer who does four separate `db.transaction('rw', [oneTable], ...)` calls would not roll back the earlier tables.
+ 11. **Settings UI: Export happy path produces a download and the success status line.** Render the Settings route with a seeded DB (2 books, 3 lists, 8 cards, 12 reviews). Spy on `URL.createObjectURL` and `URL.revokeObjectURL` (or stub a global `<a>.click` recorder). Click the "Export backup" button. Assert:
+     - During the await, the button is `disabled` and its accessible name reads `"Exporting…"`.
+     - `URL.createObjectURL` is called exactly once with a `Blob` whose type is `'application/json'`. The Blob's text content (`await blob.text()`) parses to an `ExportEnvelope` with `version: 1`, the correct counts, and `exportedAt` equal to the `Date.now()` value frozen by the test (use `vi.useFakeTimers()` + `vi.setSystemTime(...)`).
+     - A synthesised `<a>` element with the `download` attribute is clicked; the `download` value equals `formatExportFilename(<that-same-exportedAt>)`.
+     - `URL.revokeObjectURL` is called after the click (cleanup).
+     - After the action resolves, the button re-enables with accessible name `"Export backup"` and the `sync-status` element contains exactly `"Exported 2 books, 3 lists, 8 cards, 12 reviews."` (counts derived from the envelope, not from a re-read).
+  12. **Settings UI: Import happy path runs through validation → confirm → write → status.** Render Settings with empty Dexie. Construct a `File` with a valid envelope (2/3/8/12 counts) and fire a `change` event on the hidden file input. Assert in order:
+     - The `sync-error` element does NOT appear at any point.
+     - A `role="dialog"` element appears with `title="Confirm import"` and body containing `"Import 2 books, 3 lists, 8 cards, 12 reviews? Existing entries with matching IDs will be overwritten. Other data on this device is kept."`.
+     - Clicking the modal's "Import" button (scoped via `within(dialog)`) closes the modal and writes every row. After the await, `sync-status` reads exactly `"Imported 2 books, 3 lists, 8 cards, 12 reviews (0 overwritten)."`.
+     - Clicking the modal's "Cancel" button on a separate run closes the modal and writes nothing — `books.toArray().length === 0` post-cancel.
+  13. **Settings UI: Each parse/validation failure renders the locked PRD copy and does NOT mutate Dexie.** Four sub-cases, each a separate `it`:
+     - File content `"{ not valid json"` → `sync-error` text exactly `"That file isn't valid JSON. Pick an exported backup file."`; no confirm modal; DB unchanged.
+     - File content `'{"hello":"world"}'` → `sync-error` exactly `"That file isn't a Gold List Plus backup."`; no modal; DB unchanged.
+     - File content `'{"version":99,"exportedAt":1,"books":[],"pages":[],"cards":[],"reviews":[]}'` → `sync-error` exactly `"This backup was made by a newer version of Gold List Plus. Update the app and try again."`; no modal; DB unchanged.
+     - File content with a Page whose `bookId` resolves to nothing → `sync-error` exactly `"This backup is missing data it depends on (e.g. a list whose book isn't included). Nothing was imported."`; no modal; DB unchanged.
+- **Out of scope:**
+  - File System Access pinned-file auto-sync (TASK-019).
+  - Field-level or per-row merge UI; collisions are always full-row overwrites (PRD §7).
+  - Pre-import preview of which rows will change.
+  - Partial export (one Book, one List).
+  - Encryption, compression, password-protection of the export file.
+  - CSV, Anki `.apkg`, or any non-JSON interchange format.
+  - Automated / scheduled exports.
+  - Per-row warnings beyond the single overwritten count.
+  - Validation of `Page.parentPageId`, `Page.childPageId`, `Card.parentIds` (ADR-017 explicitly excludes these for v1).
+  - Pluralisation of count strings (`1 books` is acceptable for v1).
+  - The 5-second auto-clear timing of the status line (presence is asserted; the timer is presentational polish).
 
 ### TASK-019: File System Access pinned-file sync (Chromium only)
 - [ ] Status

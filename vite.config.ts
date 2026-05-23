@@ -45,5 +45,8 @@ export default defineConfig({
     environment: 'jsdom',
     setupFiles: ['./vitest.setup.ts'],
     css: false,
+    // fake-indexeddb / Dexie depend on the real setImmediate/setTimeout. Only
+    // fake Date so vi.setSystemTime works without freezing IndexedDB.
+    fakeTimers: { toFake: ['Date'] },
   },
 });

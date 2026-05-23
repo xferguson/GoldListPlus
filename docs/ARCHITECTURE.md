@@ -38,7 +38,7 @@ src/
 │   ├── bronzeTitle.ts           # pure: nextBronzeTitle(existingTitles) — gap-reuse algorithm (TASK-011)
 │   ├── time.ts                  # pure date math helpers
 │   ├── sync/
-│   │   ├── exportImport.ts      # versioned JSON dump + restore
+│   │   ├── exportImport.ts      # pure: buildExportEnvelope, formatExportFilename, parseExport, validateForeignKeys
 │   │   └── fileHandle.ts        # File System Access pinned-file
 │   └── notifications.ts         # permission, on-open notifier, TimestampTrigger feature-detect
 ├── stores/
@@ -55,7 +55,7 @@ src/
 │   │   ├── Builder/             # next-list builder
 │   │   └── GoldSummary/         # read-only end-of-review screen for Gold (no Builder)
 │   ├── Stats/
-│   ├── Settings/
+│   ├── Settings/                # index.tsx + syncActions.ts (Dexie I/O for export/import, ADR-017)
 │   └── NotFound.tsx             # wildcard catch-all
 ├── components/
 │   ├── TierBadge.tsx
@@ -70,7 +70,7 @@ src/
 ## 3. Layering rules (enforced in review)
 
 1. **UI never imports Dexie or `src/db/db.ts` directly.** UI imports repos.
-2. **`src/lib/**` (except `src/lib/sync/fileHandle.ts`) is pure.** No React, no Dexie, no `window` access.
+2. **`src/lib/**` (except `src/lib/sync/fileHandle.ts`) is pure.** No React, no Dexie, no `window` access. `src/lib/sync/exportImport.ts` is also pure — it operates on plain `ExportEnvelope` payloads passed in/out; the Dexie I/O lives in the Settings route caller (see ADR-017).
 3. **Repos own all Dexie I/O.** They expose typed async functions that return plain objects, never `Table` instances or `Collection`s.
 4. **Zustand stores hold only ephemeral session state.** Persistent data lives in IndexedDB. Stores may cache reads but never become the source of truth.
 5. **`finalizePage`** in `src/lib/distillation.ts` returns a *plan* (new List + new Cards + parent-archive list). A repo function `pages.finalize(plan)` executes the plan inside a single Dexie transaction.
@@ -240,6 +240,36 @@ Notes:
 **Why an explicit `update`:** (a) `Page.cardIds` is the canonical order of Cards within a List (Cards in the table have no `position` field; the order is intrinsic to the array on the Page); the order matters for the Distillation Review screen and for the user's manual review experience. Recomputing it from `cards.listByPage` would lose order unless we add a `position` column (a bigger refactor); (b) `finalizePage` already writes `childPage.cardIds` as an ordered list (TASK-004 / `src/lib/distillation.ts:92`), so the field is load-bearing — removing it would require a schema migration and changes to `finalizePage`; (c) the existing `flagsForPage` enumerates `page.cardIds`, so syncing it is necessary for the review flow to work; (d) the `pages.finalize` path already updates Page rows inside a transaction (parent.reviewedAt, parent.childPageId), so a thin `pages.update` is the natural pattern.
 **Route-layer contract:** ListDetail's add-Card handler runs `cards.create(card)` and then `pages.update(pageId, { cardIds: [...page.cardIds, card.id] })` in sequence. A future task may wrap this in a single Dexie transaction; for v1 the two-step is acceptable because (i) the user is on the unreviewed Bronze creation flow and a crash mid-add is recoverable by reloading and re-typing the missing Card, and (ii) wrapping it requires a new repo function (`cards.createAndAppendToPage`) which is over-engineering for one call site. Delete is symmetric: `cards.remove(cardId)` then `pages.update(pageId, { cardIds: page.cardIds.filter(id => id !== cardId) })`.
 **Tested in TASK-011** as part of the route's behaviour (add-Card AC asserts `Page.cardIds` grows; delete-Card AC asserts it shrinks). A focused repo test for `pages.update` itself is added as a small happy-path block in `src/db/repos/pages.test.ts`.
+
+### ADR-017: `exportImport.ts` is pure; Settings route owns Dexie I/O and the import transaction
+**Decision:** `src/lib/sync/exportImport.ts` is pure and contains four named exports:
+- `buildExportEnvelope({ books, pages, cards, reviews, exportedAt }): ExportEnvelope` — assembles the versioned JSON payload from in-memory row arrays. Does NOT call `Date.now()`; `exportedAt` is passed in by the caller.
+- `formatExportFilename(exportedAt: number): string` — returns `goldlistplus-backup-YYYYMMDD-HHmmss.json` (UTC, zero-padded). Pure derivation from the same `exportedAt` the envelope carries.
+- `parseExport(input: unknown): ParseResult` where `ParseResult = { ok: true; envelope: ExportEnvelope } | { ok: false; error: ImportError }` and `ImportError` is a discriminated union `{ kind: 'invalid-json' } | { kind: 'not-a-backup' } | { kind: 'newer-version' }`. The function takes already-parsed `unknown` (the caller does the `JSON.parse` inside a try/catch and converts a throw into `{ kind: 'invalid-json' }`); `parseExport` itself never throws.
+- `validateForeignKeys(envelope, dbRows): { ok: true } | { ok: false; error: { kind: 'fk-missing' } }` — given the file's envelope plus the **current DB rows** (book ids, page ids, card ids passed in as `Set<string>` parameters), checks every `Page.bookId`, every `Card.bookId`, every `Card.pageId`, every `ReviewEvent.cardId`, and every `ReviewEvent.pageId` resolves to a row in either the file or the DB. Returns on the first violation (no batched report — keeps the function small and the UI copy single-string). `Page.parentPageId`, `Page.childPageId`, and `Card.parentIds` are **not** validated in v1: archived parent rows may legitimately have been removed from a partial export-then-restore-elsewhere flow, and the PRD does not lock copy for these cases.
+
+The Settings route (`src/routes/Settings/index.tsx`) is the only caller. It:
+1. Reads all four tables via repos (`books.list`, `pages.listByBook` for each book — or a dedicated `pages.listAll()` helper if the loop is awkward — `cards` and `reviews` analogously). It is permitted to import `src/db/db.ts` directly for full-table reads if the existing repo surface is insufficient; preference is to add a thin `listAll()` to each repo rather than reach into `db` from the route. See §2 module map for the chosen path.
+2. Calls `buildExportEnvelope(...)` with `Date.now()`.
+3. Triggers download via `Blob` + `URL.createObjectURL` + a synthesised `<a download>` click. Revokes the object URL after click.
+
+For Import, the route:
+1. Reads the picked `File` via `await file.text()`.
+2. Wraps `JSON.parse(...)` in try/catch → `{ kind: 'invalid-json' }` on throw.
+3. Passes the parsed `unknown` to `parseExport`.
+4. On `ok: true`, reads existing DB ids (one `db.transaction('r', ...)` or four `repo.listAll()` calls), calls `validateForeignKeys(envelope, { bookIds, pageIds, cardIds })`.
+5. On `ok: true`, shows the confirm modal.
+6. On confirm, runs a single `db.transaction('rw', [db.books, db.pages, db.cards, db.reviews], async () => { ... })` that:
+   - For each of the four tables, walks the file's rows and calls `table.put(row)` (Dexie `put` is upsert by primary key). Counts pre-write `table.get(id) !== undefined` to populate the "overwritten" tally.
+   - Any thrown error inside the transaction body causes Dexie to roll back the whole transaction — no half-import.
+7. After commit, shows the success status line.
+
+**Why pure + thin caller (alternative considered: extend the `src/lib/**` carve-out to let `exportImport.ts` call repos):**
+- Carving out a second exception just to host four functions that each do one I/O call inverts the layering: the pure helpers (envelope builder, filename formatter, validator) are independently unit-testable against in-memory fixtures with zero Dexie scaffolding, which is the bulk of the test surface QA needs to lock down. The remaining glue is the Settings route, which is already a UI layer and gets its DB integration tests as part of the route's test file.
+- It also keeps `fileHandle.ts` (TASK-019) the sole `src/lib/sync/*` module that genuinely needs the `window` carve-out (for `showOpenFilePicker`), so the rule reads cleanly as "one exception, one reason."
+- The transaction boundary (one `db.transaction('rw', [all four tables], ...)`) is the same shape ADR-005 locked for `pages.finalize`: atomicity is a property of the Dexie call site, not of the pure logic that prepared the plan.
+
+**Out of scope for v1 (carry forward in TASKS.md):** field-level merge, per-row warnings, partial export, encryption, scheduled auto-sync (deferred to TASK-019 / FSA).
 
 ## 6. Cross-cutting rules
 

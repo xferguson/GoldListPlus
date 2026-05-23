@@ -156,10 +156,33 @@ The tier label and the colour border are both required — colour alone is not a
 
 ### 5.10 Settings
 - Defaults for new Books (interval, headlist size, autoDrop settings).
-- Export full database to JSON file.
-- Import JSON file (idempotent — re-importing the same file is a no-op).
+- Backup & restore section containing Export and Import (see §5.10.1).
 - (Chromium) Auto-sync: pick a file once, app writes on every mutation (debounced).
 - Notifications permission and a per-Book toggle.
+
+#### 5.10.1 Export / Import (Backup & restore)
+
+Grouped on the Settings page under a section heading **"Backup & restore"** with helper copy: *"Your data never leaves your device unless you export it. Use Export to make a backup, and Import to restore one on this or another device."*
+
+**Export**
+- Triggered by a button labelled **"Export backup"**.
+- Action is instant — no confirmation modal. While the export is being assembled the button is disabled and shows **"Exporting…"**; on completion the browser's normal file-save flow takes over.
+- Filename is deterministic and timestamped: `goldlistplus-backup-YYYYMMDD-HHmmss.json` (UTC, zero-padded). The timestamp lets the user identify which export they are restoring from when multiple files sit in the same folder.
+- After a successful export, an inline status line under the button shows: **"Exported N books, M lists, K cards, J reviews."** (Counts are required so the user can sanity-check the export is non-empty when they expected data.) The status line persists until the user starts another export/import action — it is not auto-dismissed on a timer. Rationale: a user who steps away from the device must still see the result on return; a silent timeout would lose that confirmation.
+- The file's top-level shape is `{ version, exportedAt, books, pages, cards, reviews }`. `version` is the literal number `1`. `exportedAt` is a Unix epoch millisecond integer captured at export start. Each array contains every row of its table verbatim — no derived fields, no computed flags, no tier counts (Sacred rule #4: one source of truth per fact).
+
+**Import**
+- Triggered by a button labelled **"Import backup"** that opens the OS file picker (accept `.json` only).
+- After file selection, the app parses and validates the file **before** mutating anything. On any validation failure the user sees an inline error under the Import button with `role="alert"`; the database is untouched. Failure cases and copy:
+  - File is not valid JSON → **"That file isn't valid JSON. Pick an exported backup file."**
+  - Top-level is not an object, or `version` is missing/not `1`, or `exportedAt` is missing/not a number, or any of `books` / `pages` / `cards` / `reviews` is missing or not an array → **"That file isn't a Gold List Plus backup."**
+  - `version` is a number other than `1` → **"This backup was made by a newer version of Gold List Plus. Update the app and try again."**
+- On successful parse, a confirmation modal appears: **"Import N books, M lists, K cards, J reviews? Existing entries with matching IDs will be overwritten. Other data on this device is kept."** with **"Import"** and **"Cancel"** buttons. The modal is required because import mutates the DB; the user must explicitly opt in.
+- On confirm, the import runs as one atomic transaction (all four tables) and upserts every row by `id`. Rows in the DB whose `id` is not in the file are left alone — import is additive/overwriting, never destructive of unrelated data.
+- **Foreign-key integrity:** before any write, the validator checks that every Page's `bookId`, every Card's `bookId` and `pageId`, every ReviewEvent's `cardId` and `pageId` resolves either to a row in the same file or to an existing row in the DB. If any reference is unresolvable the whole import is aborted with the inline error **"This backup is missing data it depends on (e.g. a list whose book isn't included). Nothing was imported."** This prevents the DB from being left in a half-imported state.
+- After a successful import, the inline status line shows: **"Imported N books, M lists, K cards, J reviews (X overwritten)."** `X` is the count of rows whose `id` already existed in the DB and were replaced. No per-row warning UI — the count is enough for v1.
+- **Idempotency:** because every row is upserted by `id` and the file's row wins fully (no partial merge, no field-level diff), importing the same file a second time replaces each row with the identical content. The second import is functionally a no-op from the user's perspective (counts may report all rows as "overwritten" the second time, which is honest and expected).
+- **Collision policy:** when a row in the file shares an `id` with a row in the DB, the file's row replaces the DB row in full — no field-by-field merge. This is the deterministic rule that makes idempotency hold.
 
 ### 5.11 Reminders
 - Lazily request notification permission from Settings (not on first launch).
@@ -189,6 +212,13 @@ The tier label and the colour border are both required — colour alone is not a
 - Dropbox/Google Drive/Gist OAuth sync.
 - True Web Push notifications.
 - Server-side anything.
+- **Export/Import (v1 scope):**
+  - No merge or conflict-resolution UI — collisions are full-row overwrites, period.
+  - No pre-import preview of which rows will change.
+  - No partial export (e.g. one Book, one List); export is always the whole database.
+  - No encryption, compression, or password-protection of the export file.
+  - No automated scheduled exports (auto-sync to a pinned file is a separate feature — §5.10 / TASK-019).
+  - No CSV, Anki `.apkg`, or other interchange formats — JSON only.
 
 ## 8. Sacred rules (do not violate)
 
