@@ -78,6 +78,36 @@ The tier label and the colour border are both required — colour alone is not a
 - After review, the List is read-only except for the Distillation flow.
 - Delete an entire List (with confirmation).
 
+#### 5.2.1 Bronze List creation flow
+- The per-Book overview (`/book/:bookId`) exposes a **"New Bronze List"** affordance (button/link). Clicking it creates the List **immediately** with no intermediate form, then navigates to `/list/:pageId`.
+  - Created Page has `tier = 'bronze'`, `title` auto-generated (see below), `createdAt = now`, `reviewableAt = now + book.settings.distillationIntervalDays * 86_400_000`, `reviewedAt = null`, `cardIds = []`.
+  - The act of pressing "New Bronze List" is the entire creation step. There is no "Ready" / "Mark complete" button — Cards are added in-place on the newly-rendered ListDetail.
+- **Auto-title.** Title is `Bronze N` where N is the smallest positive integer such that no existing Bronze List in this Book already has that title. **Gaps are reused.** If the Book contains `Bronze 1`, `Bronze 3`, the next created title is `Bronze 2`. Archived/finalized Lists still count — a List exists once it has been created, regardless of `reviewedAt`. (Rationale: stable, predictable numbering for a user who scans the overview; reuse of `Bronze 2` after deletion is acceptable because Lists are not externally referenced by title.)
+- The same `Bronze N` numbering applies to user-deletable Lists: if the user deletes `Bronze 2`, the next created Bronze List in that Book is again `Bronze 2`.
+
+#### 5.2.2 ListDetail — adding Cards on an unreviewed List
+- ListDetail for a List with `reviewedAt == null` shows an **inline add-Card form** at the bottom of the Card list (not a modal). Two text inputs (`Source`, `Target`) and an **Add** button. Both inputs are required (non-empty post-trim); submit blocked otherwise with inline error text per field, matching the New-Book form's validation idiom.
+- On successful add, the new Card is appended to the List, the form clears, and focus returns to the Source input so the user can immediately type the next entry.
+- Each existing Card row exposes inline **Edit** and **Delete** affordances while `reviewedAt == null`. Delete is immediate (no confirm modal at this scale; the List is unreviewed and the Card is trivially re-typable). Edit replaces the row with the two text inputs and a Save/Cancel pair.
+- When `reviewedAt` is set (after the first Review completes — see TASK-012), the inline add-Card form is hidden and per-row Edit/Delete affordances are removed. The repo layer (TASK-005) already rejects mutations on locked Cards; the UI mirrors that lock visually rather than relying on a silent repo failure.
+- There is **no explicit "Ready" / "Mark complete" flag**. The List is implicitly "ready for review" the moment `reviewableAt <= now`, and locked the moment `reviewedAt` is set. A user who wants to add a 26th Card the day before review is free to do so; a user who reviews early (via TASK-015-style on-demand path, not in v1 for Bronze/Silver) cannot.
+- **Card data model is `{ source: string; target: string }` only.** No tags, no notes, no part-of-speech, no example sentence in v1. The Card type definition is owned by ADR-002; this section is the product-level confirmation that no additional fields surface in the UI.
+
+#### 5.2.3 Headlist soft warning
+- When the user adds a Card that would bring the List's Card count from 25 to 26 (i.e. the add itself is the 26th), the app shows a **non-blocking inline warning** rendered immediately above the add-Card form. The Card is added normally — the warning does not gate the submit.
+- Copy: **"You have 26 cards on this list. The Gold List Method recommends keeping a headlist around 25 entries — longer lists make distillation harder to remember."**
+- The warning is dismissible via a close (`×`) button on the warning element. Once dismissed, it does not re-appear for the same List in the same session even as further Cards are added (27, 28, ...). A page reload re-arms the warning.
+- The warning re-fires if the user deletes a Card to bring the count back to 25 and then adds another to reach 26 — but only after a fresh page load or if not dismissed earlier in the session.
+- The threshold (25) is hardcoded to match `DEFAULT_BOOK_SETTINGS.headlistSize`. When per-Book overrides ship (§5.10), the threshold reads from `book.settings.headlistSize`.
+
+#### 5.2.4 Per-Book overview content (v1 minimum)
+- `/book/:bookId` renders:
+  - The Book's name as an `<h1>`.
+  - The **New Bronze List** affordance (always visible, regardless of existing Lists).
+  - A flat, chronologically-ordered list of every existing Page in the Book (newest first), each row showing tier-coloured border, tier label, title (`Bronze 1` etc.), created date, and a link to `/list/:pageId`.
+  - Empty state: when the Book has zero Pages, the area below the New-Bronze-List affordance shows the copy **"No lists yet. Create your first Bronze List to start."** — no illustration, no secondary CTA (the affordance above is the CTA).
+- Tier-grouped layout (Bronze / Silver / Gold sections), due-date column, and status pill (Active / Reviewed / In Distillation) are deferred to **TASK-016** ("per-Book overview polish"). TASK-011 ships the flat list only.
+
 ### 5.3 Review
 - Show one Card at a time, source side first.
 - Spacebar flips. Keys 1–4 rate Wrong / Hard / Moderate / Easy. Buttons present for touch.
@@ -159,6 +189,12 @@ Grouped on the Settings page under a section heading **"Backup & restore"** with
 - On app open: fire a local notification for each List with `reviewableAt ≤ now` AND tier ≠ gold AND `lastNotifiedAt < now − 24h`. Set `lastNotifiedAt = now` after firing.
 - Where Notification Triggers API is supported (Chromium), schedule a `TimestampTrigger` at each new non-Gold List's `reviewableAt`.
 - iOS reality: without a backend, no true Web Push. Notifications fire only on app open. Surface this in Settings copy.
+
+### 5.12 App update prompt
+- When the service worker detects a new build, the app shows a **non-blocking toast** offering the user an explicit action to reload into the new version. The toast does NOT auto-reload — Gold List Method work (mid-review ratings, in-flight Distillation Builder state) must never be lost to a silent refresh.
+- The toast is dismissible. Dismissing keeps the user on the current version until the next app open, at which point the new SW takes over normally.
+- Copy guidance (implementer may match in spirit, exact wording not locked): toast text should name the situation ("A new version is available") and the action button should be a verb-led label such as "Reload to update". The action button is the primary affordance; dismiss is secondary.
+- The toast is purely a UI surface for the SW update lifecycle; it does not gate any other functionality.
 
 ## 6. Non-functional requirements
 

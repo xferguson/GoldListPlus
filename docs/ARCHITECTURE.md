@@ -35,6 +35,7 @@ src/
 │   ├── distillation.ts          # pure: flagCardForDistillation, flagsForPage, nextTier, finalizePage
 │   ├── tiers.ts                 # tier constants, visual mapping (colour, label, border)
 │   ├── defaults.ts              # app-wide default constants (DEFAULT_BOOK_SETTINGS, NAME_MAX)
+│   ├── bronzeTitle.ts           # pure: nextBronzeTitle(existingTitles) — gap-reuse algorithm (TASK-011)
 │   ├── time.ts                  # pure date math helpers
 │   ├── sync/
 │   │   ├── exportImport.ts      # pure: buildExportEnvelope, formatExportFilename, parseExport, validateForeignKeys
@@ -47,7 +48,7 @@ src/
 │   ├── Layout.tsx               # global header/nav shell wrapping <Routes>
 │   ├── Dashboard/
 │   ├── Book/                    # per-Book overview (index.tsx) + NewBook.tsx (/book/new)
-│   ├── ListDetail/
+│   ├── ListDetail/              # index.tsx (CardRow inline) + AddCardForm.tsx (TASK-011)
 │   ├── Review/                  # flashcard flow
 │   ├── Distill/
 │   │   ├── ReviewSummary/       # post-review flag screen
@@ -61,14 +62,15 @@ src/
 │   ├── TierBorder.tsx
 │   ├── Flashcard.tsx
 │   ├── RatingButtons.tsx
-│   └── Modal.tsx
+│   ├── Modal.tsx
+│   └── UpdatePrompt.tsx        # SW update toast (ADR-013)
 └── index.css                    # Tailwind entry
 ```
 
 ## 3. Layering rules (enforced in review)
 
 1. **UI never imports Dexie or `src/db/db.ts` directly.** UI imports repos.
-2. **`src/lib/**` (except `src/lib/sync/fileHandle.ts`) is pure.** No React, no Dexie, no `window` access. `src/lib/sync/exportImport.ts` is also pure — it operates on plain `ExportEnvelope` payloads passed in/out; the Dexie I/O lives in the Settings route caller (see ADR-013).
+2. **`src/lib/**` (except `src/lib/sync/fileHandle.ts`) is pure.** No React, no Dexie, no `window` access. `src/lib/sync/exportImport.ts` is also pure — it operates on plain `ExportEnvelope` payloads passed in/out; the Dexie I/O lives in the Settings route caller (see ADR-017).
 3. **Repos own all Dexie I/O.** They expose typed async functions that return plain objects, never `Table` instances or `Collection`s.
 4. **Zustand stores hold only ephemeral session state.** Persistent data lives in IndexedDB. Stores may cache reads but never become the source of truth.
 5. **`finalizePage`** in `src/lib/distillation.ts` returns a *plan* (new List + new Cards + parent-archive list). A repo function `pages.finalize(plan)` executes the plan inside a single Dexie transaction.
@@ -212,7 +214,34 @@ Notes:
 **Why a pure constants module:** (a) §3 rule 4 says stores hold ephemeral state, not domain constants; (b) `src/lib/**` is the canonical home for pure values and §2 already lists it; (c) when Settings (§5.10) lands and defaults become user-overridable, the override will be stored in IndexedDB (a `settings` table or a `books`-level fallback), not in a Zustand store — the constants in `defaults.ts` become the *fallback* the persisted overrides shadow. No store refactor is forced by that future change. (d) Inlining in NewBook duplicates the values once §5.10 ships.
 **Layering note:** `defaults.ts` may `import type` from `src/db/db.ts` (matches the §2 rule that `src/lib/**` imports types from `db/db.ts`). No runtime imports.
 
-### ADR-013: `exportImport.ts` is pure; Settings route owns Dexie I/O and the import transaction
+### ADR-013: PWA update flow — autoUpdate registration + user-gated activation via UpdatePrompt
+**Decision:** Keep `registerType: 'autoUpdate'` on `vite-plugin-pwa` and add `src/components/UpdatePrompt.tsx`, a non-blocking toast that consumes the `useRegisterSW` hook from `virtual:pwa-register/react` and calls `updateServiceWorker(true)` only on explicit user click. Mount `<UpdatePrompt/>` once inside `routes/Layout.tsx` so the toast is reachable from every screen but lives outside `<Routes>`.
+**Alternatives considered:** (a) pure auto-update — let Workbox install AND activate the new SW the moment it downloads, refreshing the page automatically; (b) pure manual — `registerType: 'prompt'`, surface the toast and require the user to also remember to hard-refresh; (c) banner instead of toast (top of screen instead of bottom corner).
+**Why this combination:** the two terms `autoUpdate` and "user-gated" sound contradictory but compose cleanly. Under `registerType: 'autoUpdate'`, Workbox precaches the new SW and marks it `waiting` as soon as the browser pulls the new build down, but the new SW does NOT take control of the page until `skipWaiting()` runs. `useRegisterSW` exposes a `needRefresh` boolean (true once a new SW is waiting) and an `updateServiceWorker(reloadPage: boolean)` action that triggers `skipWaiting()` plus an optional `window.location.reload()`. The toast watches `needRefresh`, renders when true, and only calls `updateServiceWorker(true)` when the user clicks the reload button. Pure auto-update violates PRD §5.12 — a silent refresh mid-review wipes the in-memory `useReviewSessionStore` state and discards a half-built Distillation Builder draft. Pure manual loses the benefit of having the new SW already downloaded and ready: the next cold open is instant rather than waiting on the new precache.
+**Dismissal semantics:** the toast's dismiss button hides the toast for the current session WITHOUT calling `updateServiceWorker`. The waiting SW stays waiting; the next cold open lets Workbox activate it normally (which is the default `skipWaiting` behaviour on next navigation). Dismissal therefore costs the user nothing — they just defer the prompt.
+**Implementation pointers:** the import path is `virtual:pwa-register/react` (literally — it is a virtual module supplied by `vite-plugin-pwa`; the implementer must add `vite-plugin-pwa/client` to `compilerOptions.types` in `tsconfig.app.json` for TypeScript to see the module declaration). `useRegisterSW({ onRegisteredSW, onRegisterError })` returns `{ needRefresh: [boolean, setter], updateServiceWorker: (reload?: boolean) => Promise<void> }`. The toast's QA contract is testable without a real SW by mocking the module with `vi.mock('virtual:pwa-register/react', () => ({ useRegisterSW: () => ({ needRefresh: [true, vi.fn()], updateServiceWorker: vi.fn() }) }))` and asserting the component's behaviour against the mocked return values.
+**Dependency impact:** none. `vite-plugin-pwa` already ships `virtual:pwa-register/react`; no new runtime dependency is needed and §8 ledger is unchanged.
+
+### ADR-014: Bronze-List title is computed by gap-reusing the smallest unused positive integer
+**Decision:** `nextBronzeTitle(existingTitles: string[]): string` lives in `src/lib/bronzeTitle.ts`. It parses each existing title as `^Bronze (\d+)$` (exact match, single space, no leading zeros), collects the matched integers into a `Set<number>`, and returns `` `Bronze ${N}` `` where `N` is the smallest positive integer not in the set. Titles that do not match the pattern are ignored. Archived / finalized / reviewed Lists are counted — a title exists once any Page in the Book uses it, regardless of `reviewedAt` or `archivedAt`. The caller (the per-Book overview's `New Bronze List` affordance) passes `(await pages.listByBook(bookId)).filter(p => p.tier === 'bronze').map(p => p.title)`.
+**Alternatives considered:** (a) a monotonic counter stored on `Book.settings.nextBronzeIndex` and incremented on each create; (b) titles are `` `Bronze ${pages.length + 1}` `` at creation time.
+**Why gap-reuse:** (a) Counters drift when Lists are deleted: deleting `Bronze 2` should make `Bronze 2` available again (PRD §5.2.1). A counter approach would either skip 2 (confusing) or require a separate "free list" structure; (b) `pages.length + 1` fails the moment any List is deleted (you'd get `Bronze 3` after deleting `Bronze 1`); (c) gap-reuse is one pure function over the existing titles, no extra persisted state, no migration risk. The PRD pins this behaviour as canonical; this ADR pins the algorithm so a future implementer does not accidentally add a counter to `BookSettings`.
+**Layering:** `bronzeTitle.ts` lives in `src/lib/`, is pure (no I/O, no `Date.now()`), takes `existingTitles: string[]` and returns `string`. Tested via `src/lib/bronzeTitle.test.ts` with discriminating fixtures (empty list → `Bronze 1`; `['Bronze 1','Bronze 3']` → `Bronze 2`; non-matching titles like `'Silver 1'` ignored; gaps after deletion reuse).
+
+### ADR-015: Headlist-size warning is in-memory session state only
+**Decision:** The 26-card soft warning on ListDetail (PRD §5.2.3) is gated by a `useState`-local `dismissed` flag inside the ListDetail route component. It is **not** persisted to IndexedDB, **not** persisted to `localStorage` / `sessionStorage`, **not** mirrored onto a Zustand store. A page reload (or remount via route navigation) re-arms the warning. Dismissal lasts only for the lifetime of the current ListDetail mount.
+**Alternatives considered:** (a) persist `headlistWarningDismissedAt` on the Page row; (b) a `Set<pageId>` slice on `useAppStore`; (c) a `localStorage` flag keyed by `pageId`.
+**Why session-only:** (a) Persisting it spreads UI state into the data model and violates §3 rule 4 (stores hold ephemeral state; the DB holds domain truth); (b) the PRD explicitly specifies "A page reload re-arms the warning" — anything more durable than React state violates the spec; (c) the user can re-trigger the warning trivially by reloading, so durability buys nothing; (d) future per-Book `headlistSize` overrides (§5.10) will change the threshold but not the persistence story.
+**Implementer constraint:** `ListDetail/index.tsx` must use `useState<boolean>(false)` for dismissal. No `useAppStore`, no `localStorage.setItem`, no `sessionStorage.setItem`, no `db.pages.update` calls related to the warning. TASK-011 includes a source-scan test asserting `ListDetail/index.tsx` contains no `localStorage` / `sessionStorage` substring, plus a remount test asserting the dismissed state resets when the route remounts.
+
+### ADR-016: `pages.update` repo function for in-place Page mutations
+**Decision:** `src/db/repos/pages.ts` exports a new `update(id: string, changes: Partial<Page>): Promise<void>` function that delegates to `db.pages.update(id, changes)`. It is unconditional — no lock check like `cards.update` — because the locked-Page invariant (no edits after `reviewedAt`) is enforced at the **route** layer (ListDetail hides the affordances) and via the existing card-level lock in `cards.update` / `cards.remove`. `pages.update` is the mechanism by which ListDetail keeps `Page.cardIds` in sync after each `cards.create` / `cards.remove` while the List is unreviewed.
+**Alternatives considered:** (a) derive `Page.cardIds` lazily by querying `cards.listByPage(pageId)` every time it is read; (b) collapse `Page.cardIds` to a derived view and remove it from the Page row entirely.
+**Why an explicit `update`:** (a) `Page.cardIds` is the canonical order of Cards within a List (Cards in the table have no `position` field; the order is intrinsic to the array on the Page); the order matters for the Distillation Review screen and for the user's manual review experience. Recomputing it from `cards.listByPage` would lose order unless we add a `position` column (a bigger refactor); (b) `finalizePage` already writes `childPage.cardIds` as an ordered list (TASK-004 / `src/lib/distillation.ts:92`), so the field is load-bearing — removing it would require a schema migration and changes to `finalizePage`; (c) the existing `flagsForPage` enumerates `page.cardIds`, so syncing it is necessary for the review flow to work; (d) the `pages.finalize` path already updates Page rows inside a transaction (parent.reviewedAt, parent.childPageId), so a thin `pages.update` is the natural pattern.
+**Route-layer contract:** ListDetail's add-Card handler runs `cards.create(card)` and then `pages.update(pageId, { cardIds: [...page.cardIds, card.id] })` in sequence. A future task may wrap this in a single Dexie transaction; for v1 the two-step is acceptable because (i) the user is on the unreviewed Bronze creation flow and a crash mid-add is recoverable by reloading and re-typing the missing Card, and (ii) wrapping it requires a new repo function (`cards.createAndAppendToPage`) which is over-engineering for one call site. Delete is symmetric: `cards.remove(cardId)` then `pages.update(pageId, { cardIds: page.cardIds.filter(id => id !== cardId) })`.
+**Tested in TASK-011** as part of the route's behaviour (add-Card AC asserts `Page.cardIds` grows; delete-Card AC asserts it shrinks). A focused repo test for `pages.update` itself is added as a small happy-path block in `src/db/repos/pages.test.ts`.
+
+### ADR-017: `exportImport.ts` is pure; Settings route owns Dexie I/O and the import transaction
 **Decision:** `src/lib/sync/exportImport.ts` is pure and contains four named exports:
 - `buildExportEnvelope({ books, pages, cards, reviews, exportedAt }): ExportEnvelope` — assembles the versioned JSON payload from in-memory row arrays. Does NOT call `Date.now()`; `exportedAt` is passed in by the caller.
 - `formatExportFilename(exportedAt: number): string` — returns `goldlistplus-backup-YYYYMMDD-HHmmss.json` (UTC, zero-padded). Pure derivation from the same `exportedAt` the envelope carries.
@@ -283,6 +312,7 @@ Line counts include code and comments but exclude trailing blank lines.
   - `manifest.scope` and `manifest.start_url` both set to the base path.
   - `workbox.navigateFallback: 'index.html'` so deep hash routes hydrate.
 - `public/.nojekyll` to disable Jekyll on Pages.
+- Update activation is user-gated via `src/components/UpdatePrompt.tsx` (ADR-013). `registerType: 'autoUpdate'` precaches the new SW; the toast triggers `skipWaiting` only on explicit user click. No silent mid-session reloads.
 
 ## 8. Dependency ledger
 

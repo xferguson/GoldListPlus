@@ -13,12 +13,12 @@ import * as books from '../../db/repos/books';
 import * as pages from '../../db/repos/pages';
 import * as cards from '../../db/repos/cards';
 import * as reviews from '../../db/repos/reviews';
-// Per ADR-013 the import transaction lives in the Settings route layer, not
+// Per ADR-017 the import transaction lives in the Settings route layer, not
 // in the pure lib. The import below pins the API shape: if the implementer
 // chooses a different name the import fails at module load (Red).
 import { runImportTransaction } from '../../routes/Settings/syncActions';
 
-// Source-purity scan idiom — mirrors TASK-006 / TASK-009. Per ADR-013 the
+// Source-purity scan idiom — mirrors TASK-006 / TASK-009. Per ADR-017 the
 // pure lib has no Dexie/React/Date.now/window refs.
 const SYNC_SOURCE_MODULES = import.meta.glob('./exportImport.ts', {
   query: '?raw', import: 'default', eager: true,
@@ -219,7 +219,7 @@ describe('TASK-018 AC-4: validateForeignKeys', () => {
     if (!result.ok) expect(result.error.kind).toBe('fk-missing');
   });
 
-  // kills: implementer who eagerly validates Card.parentIds (ADR-013
+  // kills: implementer who eagerly validates Card.parentIds (ADR-017
   // explicitly excludes parentIds / parentPageId / childPageId from v1).
   it('TASK-018 AC-4: Card.parentIds:["ghost"] is NOT validated → ok:true', () => {
     const env = envOf({
@@ -512,7 +512,7 @@ describe('TASK-018 AC-10: import transaction rolls back atomically on mid-write 
   });
 });
 
-// --- Source-purity scan: exportImport.ts is pure per ADR-013 ---------------
+// --- Source-purity scan: exportImport.ts is pure per ADR-017 ---------------
 
 describe('TASK-018: exportImport.ts is pure (no Dexie / React / Date.now / window)', () => {
   // kills: misconfigured ?raw glob silently returning '' — purity checks pass vacuously.
@@ -536,7 +536,7 @@ describe('TASK-018: exportImport.ts is pure (no Dexie / React / Date.now / windo
   });
 
   // kills: a value-shaped import from '../../db/db' would pull in the Dexie
-  // runtime singleton and break ADR-013. Type-only imports are fine.
+  // runtime singleton and break ADR-017. Type-only imports are fine.
   it('TASK-018: any import from ../../db/db is type-only', () => {
     const lines = SYNC_SOURCE.split('\n').filter((l) =>
       /from\s+['"]\.\.\/\.\.\/db\/db['"]/.test(l));

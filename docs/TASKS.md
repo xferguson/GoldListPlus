@@ -235,18 +235,162 @@
   - The Book overview page content itself (TASK-011 / TASK-016 own that).
 
 ### TASK-011: Create a Bronze List + add Cards
-- [ ] Status
-- **Files touched:** `src/routes/Book/index.tsx`, `src/routes/ListDetail/index.tsx`.
-- **Depends on:** TASK-008, TASK-010.
+- [✓] Status — complete (2026-05-23). QA Engineer wrote 4 test files covering all 18 AC: `src/lib/bronzeTitle.test.ts` (146 non-blank lines, pure helper unit tests including empty / monotonic / gap-reuse / multi-gap / non-matching / malformed inputs and the source-purity scan), `src/db/repos/pages.test.ts` (369 non-blank lines after extension, happy-path `update` block covering `cardIds` rewrite, `reviewedAt` set, no-lock-check on already-reviewed Pages), `src/routes/Book/Book.test.tsx` (402 non-blank lines, New-Bronze-List affordance + `pages.create` payload including the discriminating `distillationIntervalDays = 7` fixture, gap-reuse on second create, newest-first ordering, empty-state copy, `TierBorder`/`TierBadge` rendering, navigation to `/list/:pageId`), `src/routes/ListDetail/ListDetail.test.tsx` (517 non-blank lines, route header + add/edit/delete flows + locked-Page branch + headlist warning at 26 + dismiss + remount-rearm + delete-readd-no-rearm + `localStorage`/`sessionStorage` source-scan). Implementer made them pass with `src/lib/bronzeTitle.ts` (12 non-blank lines, pure `Set`-based gap-reuse with `^Bronze ([1-9]\d*)$` regex rejecting leading zeros), `src/db/repos/pages.ts` (42 non-blank lines after adding unconditional `update(id, changes)`), `src/routes/Book/index.tsx` (106 non-blank lines, `useParams`-driven, `books.get` + `pages.listByBook` in one effect, button-driven mutation+navigate, `TierBorder` wrapping each row, `DAY_MS = 86_400_000` local constant), `src/routes/ListDetail/index.tsx` (223 non-blank lines, `CardRow` kept inline, `useState<boolean>` for warning dismissal, no `localStorage`/`sessionStorage`/Zustand), and `src/routes/ListDetail/AddCardForm.tsx` (93 non-blank lines, extracted because the first-pass index.tsx crossed the 250-line soft cap — pre-approved by ADR-016 / the "Files touched" note; named export, owns its own source/target/error state, calls back to parent with the built `Card`). Code Reviewer approved with non-blocking notes; second-pass QA confirmed honest mutation-resistant coverage. Second-pass Tech Lead audit clean: **ADR-014 honoured** (`nextBronzeTitle` is pure, `Set`-based, regex rejects leading zeros, no Dexie/React/Date.now/window — grep-confirmed); **ADR-015 honoured** (`useState<boolean>(false)` dismissal in ListDetail; production source contains no `localStorage`/`sessionStorage`/`useAppStore`/`persist` substrings — grep-confirmed; remount re-arms via the standard React unmount lifecycle); **ADR-016 honoured** (`pages.update` is unconditional, route layer enforces the lock by hiding affordances and rendering `list-locked` copy; AC-2 explicitly asserts `pages.update` resolves against an already-reviewed Page). §3 layering intact: `bronzeTitle.ts` imports nothing; `pages.ts` imports only `db` + `Page` type + `FinalizePlan` type; routes import `* as books / pages / cards` directly (UI → repo, no store wrapper); `import type` used for `BookType`, `Page`, `Card`, `FormEvent`. §6 file-size discipline: every production file well under its bucket's hard cap (largest is `ListDetail/index.tsx` at 223 vs 350 hard, comfortably above the 250 soft threshold the implementer planned around by extracting AddCardForm); tests under the 600 hard cap (largest 517). §7 dependency ledger unchanged — `package.json` shows no new runtime or dev deps. §2 module map tightened to read `ListDetail/ # index.tsx (CardRow inline) + AddCardForm.tsx (TASK-011)` so future readers see exactly what shipped. PRD §8 sacred rules respected: rule #1 (Bronze creation is one click + navigate with no Builder / no parent pre-fill — the new Page has `cardIds: []`); rule #4 (Card archive remains `archivedAt`; the route never touches a boolean flag; `pages.update` mutates Page-level state only); rule #5 (no backend, all I/O through Dexie repos). Forward notes for downstream tasks: (a) **TASK-012 (Review flow)** — adds the `Start Review` affordance to `/list/:pageId` (placed near the locked-state copy, visible only on unreviewed Pages with `cardIds.length > 0`); will read `page.cardIds` to seed `useReviewSessionStore` and call `reviews.append` per rating. The current ListDetail does not render any start-review affordance — TASK-012 owns adding it without disturbing the add/edit/delete flow. (b) **TASK-013 (Distillation Review screen)** — consumes the `Page.cardIds` array kept in sync by TASK-011's add/delete handlers (via `pages.update(pageId, { cardIds })`), so the post-review flag screen sees the canonical card order. The "synced on every add/delete" guarantee is now load-bearing. (c) **TASK-014 (Builder)** — will generalise `nextBronzeTitle` if the same gap-reuse algorithm is wanted for Silver/Gold child Pages; for now `nextBronzeTitle` remains Bronze-specific (ADR-014 pins the title format to `Bronze N`), and `finalizePage` derives the child title separately (it currently inherits from the builder caller). If TASK-014 wants gap-reuse for child titles, factor `nextBronzeTitle` into a tier-parameterised `nextTitleForTier(tier, existingTitles)` rather than duplicating the algorithm. (d) **TASK-016 (per-Book overview polish)** — replaces the flat newest-first list with tier-grouped sections (Bronze / Silver / Gold) and adds due-date column + status pill. The current rendering keeps the `TierBorder` and `TierBadge` per-row primitives so the upgrade is additive (group by tier, then sort within group). The `[bookId+tier]` compound index in §4 already supports the grouped query. (e) `pages.update` is now a general-purpose Page mutator — TASK-012 will use it to write `reviewedAt` + `lastNotifiedAt`, and TASK-014's `finalizePage` already uses `db.pages.update` inside its transaction; no further repo additions needed for that flow. (f) `AddCardForm` is intentionally route-local (only used by ListDetail); if a future "duplicate Card to another List" feature wants the same widget, promote it to `src/components/` then — premature now.
+- **Files touched:**
+  - Production: `src/routes/Book/index.tsx` (per-Book overview — replaces 6-line stub), `src/routes/ListDetail/index.tsx` (replaces 6-line stub), `src/lib/bronzeTitle.ts` (new pure helper — see ADR-014), `src/db/repos/pages.ts` (add `update` — see ADR-016).
+  - Tests: `src/routes/Book/Book.test.tsx`, `src/routes/ListDetail/ListDetail.test.tsx`, `src/lib/bronzeTitle.test.ts`, `src/db/repos/pages.test.ts` (extend with `pages.update` happy-path block).
+  - Components: **no new** components extracted. AddCardForm and CardRow live inline in `ListDetail/index.tsx` to keep the test surface single-file; if the route exceeds the §6 soft cap of 250 lines, the Implementer must split AddCardForm into `src/routes/ListDetail/AddCardForm.tsx` (route-local, not reusable elsewhere in v1) before submitting. The hard cap is 350 lines.
+- **Depends on:** TASK-008 (`TierBadge`, `TierBorder` primitives), TASK-010 (`useAppStore.currentBookId`, `DEFAULT_BOOK_SETTINGS`, the UI-imports-repos pattern).
+- **Architectural notes (tech-lead decisions):**
+  - **Routing:** the `New Bronze List` affordance on `/book/:bookId` creates the Page **immediately** with no intermediate form (PRD §5.2.1) and then `navigate(`/list/${pageId}`)`. The affordance is a `<button>` (not a `<Link>`) because clicking it has a side effect (creating a row) before navigating. The book overview route reads `bookId` from `useParams<{ bookId: string }>()`; `useAppStore.currentBookId` is NOT the source of truth here (it is a hint from TASK-010 only).
+  - **Auto-title computation (ADR-014):** `nextBronzeTitle(existingTitles)` in `src/lib/bronzeTitle.ts` is pure. The route calls `pages.listByBook(bookId)`, filters to `tier === 'bronze'`, maps to `.title`, and passes that to `nextBronzeTitle`. Gap-reuse is the spec, NOT a counter. See ADR-014 for the algorithm contract and why a counter on `BookSettings` is forbidden.
+  - **Page row at creation:** `pages.create({ id: newId(), bookId, title: nextBronzeTitle(...), tier: 'bronze', createdAt: now, reviewableAt: now + book.settings.distillationIntervalDays * 86_400_000, cardIds: [] })`. `reviewedAt` is left `undefined`. `now = Date.now()` at the call site (§3 rule 6). The intervalDays multiplier is the literal `86_400_000` (matches `src/lib/distillation.ts` `DAY_MS`); the test asserts exact arithmetic against an injected `distillationIntervalDays = 7` fixture to discriminate it from a hardcoded 14.
+  - **Card add flow:** ListDetail's add-Card handler runs `cards.create(card)` then `pages.update(pageId, { cardIds: [...page.cardIds, card.id] })` (ADR-016). The new Card row is appended to the visible list, the form clears, and focus returns to the Source input (PRD §5.2.2). After both repo calls resolve, the route re-reads `pages.get(pageId)` and `cards.listByPage(pageId)` to refresh the displayed state (or maintains an optimistic local list — Implementer's choice, but the AC asserts the Dexie state after each add).
+  - **Card delete flow:** `cards.remove(cardId)` then `pages.update(pageId, { cardIds: page.cardIds.filter(id => id !== cardId) })`. No confirm modal (PRD §5.2.2).
+  - **Card edit flow:** in-place row replacement with Source/Target inputs and Save/Cancel. Save calls `cards.update(cardId, { source, target })`. No change to `Page.cardIds` is needed (the array stores ids, not contents).
+  - **Locked-List branch:** the ListDetail route reads `page.reviewedAt`. If defined, the add-Card form is hidden and per-row Edit/Delete affordances are absent. The locked branch is exercised by a separate fixture in the test suite; the unreviewed branch is the default.
+  - **Headlist-size warning (ADR-015):** `useState<boolean>(false)` for `dismissed`. The warning element renders when `page.cardIds.length >= 26 && !dismissed`. The dismiss button is a `<button data-testid="warning-dismiss" aria-label="Dismiss warning">×</button>`. The warning does not re-arm within the same mount once dismissed (further adds at 27, 28 do not bring it back). Remounting the route (route change away and back) re-arms it. No `localStorage`, no `sessionStorage`, no Zustand. Asserted by both a source-scan test on `ListDetail/index.tsx` and a behavioural remount test.
+  - **Repo access pattern:** the route imports `* as pages from '../../db/repos/pages'` and `* as cards from '../../db/repos/cards'` directly, mirroring the TASK-010 NewBook pattern. No store wrapper.
+  - **Field labels and DOM contracts** (locked so QA can write mutation-survivable tests; Implementer must match exactly):
+    - **Per-Book overview (`/book/:bookId`):**
+      - Root: existing `<main data-testid="route-book">`. An `<h1>` displays the Book's `name` (read via `books.get(bookId)`).
+      - New-Bronze-List affordance: `<button type="button" data-testid="new-bronze-list">New Bronze List</button>` — selector `screen.getByRole('button', { name: /new bronze list/i })`.
+      - Existing-Lists container: `<ul data-testid="pages-list">` containing one `<li data-testid="page-row-${pageId}">` per Page in the Book. Each row contains a `<a data-testid="page-link-${pageId}" href="#/list/${pageId}">` with the Page title as its accessible name, the `TierBadge` and `TierBorder` primitives (Book overview uses these for visual treatment, per PRD §5.2.4), and a `<time data-testid="page-created-${pageId}" dateTime={ISO string of createdAt}>` rendering the created date.
+      - Empty-state: when `pages.listByBook(bookId)` returns `[]`, render `<p data-testid="pages-empty">No lists yet. Create your first Bronze List to start.</p>` — exact copy, PRD §5.2.4. Asserted via `screen.getByText(/^No lists yet\. Create your first Bronze List to start\.$/)`.
+      - List ordering: newest-first by `createdAt` (descending). The test fixture has at least three Pages with deliberately non-monotonic `createdAt` values; the AC asserts the DOM order matches the sort.
+      - Book name displayed via `<h1>` — if `books.get(bookId)` returns `undefined`, render `<p data-testid="book-not-found">Book not found</p>` (defensive; not a primary AC but defined so the implementer does not crash on a stale route param).
+    - **ListDetail (`/list/:pageId`):**
+      - Root: existing `<main data-testid="route-list-detail">`.
+      - Tier wrapper: page content wrapped in `<TierBorder tier={page.tier}>`; the header contains `<TierBadge tier={page.tier} />` and the Page title as `<h1>`.
+      - Card list: `<ul data-testid="cards-list">` containing one `<li data-testid="card-row-${cardId}">` per Card. Each card row contains the source and target text (Implementer's markup, but both strings must be visible and `screen.getByText(source)` resolves).
+      - Edit affordance (unreviewed only): `<button data-testid="card-edit-${cardId}" aria-label="Edit card">Edit</button>` inside `card-row-${cardId}`.
+      - Delete affordance (unreviewed only): `<button data-testid="card-delete-${cardId}" aria-label="Delete card">Delete</button>` inside `card-row-${cardId}`.
+      - Edit-mode row: when Edit is clicked, the row renders inputs `getByLabelText(/^source$/i)` and `getByLabelText(/^target$/i)` (scoped to that row via `within(...)`) plus `getByRole('button', { name: /^save$/i })` and `getByRole('button', { name: /^cancel$/i })`. Cancel discards changes; Save calls `cards.update`.
+      - Add-Card form (unreviewed only): `<form aria-label="Add card" data-testid="add-card-form">` with `<label htmlFor="add-card-source">Source</label> <input id="add-card-source">` and `<label htmlFor="add-card-target">Target</label> <input id="add-card-target">`, and `<button type="submit">Add</button>`. Selectors: `getByLabelText(/^source$/i)` for the source input, `getByLabelText(/^target$/i)` for the target input, `getByRole('button', { name: /^add$/i })` for submit.
+      - Inline add-form errors: `<p data-testid="error-add-source" role="alert">Source is required</p>` and `<p data-testid="error-add-target" role="alert">Target is required</p>`, mirroring the NewBook validation idiom.
+      - Locked branch: when `page.reviewedAt !== undefined`, the route renders no `add-card-form`, no `card-edit-*` buttons, no `card-delete-*` buttons. A `<p data-testid="list-locked">This list has been reviewed and is read-only.</p>` is rendered above the card list. (Defensive copy; an implementer who omits it fails the AC.)
+      - Headlist-size warning: `<div data-testid="headlist-warning" role="status">` containing the exact text **"You have 26 cards on this list. The Gold List Method recommends keeping a headlist around 25 entries — longer lists make distillation harder to remember."** plus `<button data-testid="warning-dismiss" aria-label="Dismiss warning">×</button>`. The element is positioned **immediately above** the add-card form (asserted by sibling-order check or by `compareDocumentPosition`).
+  - **Soft cap targets:**
+    - `src/routes/Book/index.tsx` — target ~120 lines, hard cap 350 (route bucket).
+    - `src/routes/ListDetail/index.tsx` — target ~250 lines, hard cap 350. If it crosses 250, extract AddCardForm into a sibling file. Do NOT extract CardRow unless the file is still over 250 after AddCardForm is extracted — a row with edit/delete inline is small and pays its way as inline JSX.
+    - `src/lib/bronzeTitle.ts` — target ~15 lines, hard cap 200.
+    - `src/db/repos/pages.ts` — currently 44 lines, adding `update` brings it to ~48; hard cap 200.
+    - Tests: each test file target 400 lines, hard cap 600.
 - **Acceptance criteria:**
-  1. From a Book overview, the user can create a new Bronze List with an auto-generated title (`Bronze 1`, `Bronze 2`, …).
-  2. ListDetail allows adding Cards (source + target) until the user marks the List "Ready" (sets a flag — actually we just set `reviewableAt = createdAt + intervalDays` at creation and lock further edits when `reviewedAt` is set).
-  3. ListDetail displays the tier border and label per PRD §4, by composing the `TierBadge` and `TierBorder` primitives from TASK-008 (which already consume `tierVisual` from `src/lib/tiers.ts`). This task does not edit `src/lib/tiers.ts` or the components themselves.
-  4. Soft warning shown when adding the 26th Card; not blocked.
+  1. **`nextBronzeTitle` pure helper.**
+     - Exports a named function `nextBronzeTitle(existingTitles: string[]): string` from `src/lib/bronzeTitle.ts`.
+     - `nextBronzeTitle([])` returns `'Bronze 1'`.
+     - `nextBronzeTitle(['Bronze 1'])` returns `'Bronze 2'`.
+     - `nextBronzeTitle(['Bronze 1', 'Bronze 2'])` returns `'Bronze 3'`.
+     - **Gap reuse:** `nextBronzeTitle(['Bronze 1', 'Bronze 3'])` returns `'Bronze 2'` — discriminates "smallest unused" from "highest + 1".
+     - **Gap reuse with multiple gaps:** `nextBronzeTitle(['Bronze 2', 'Bronze 4', 'Bronze 5'])` returns `'Bronze 1'` — discriminates from "highest + 1" and from "length + 1".
+     - **Non-matching titles ignored:** `nextBronzeTitle(['Silver 1', 'Gold 1', 'Bronze 1'])` returns `'Bronze 2'` — the non-Bronze titles do not contribute.
+     - **Malformed-titles ignored:** `nextBronzeTitle(['Bronze', 'Bronze  2', 'bronze 1', 'Bronze 01'])` returns `'Bronze 1'` — bare "Bronze" (no number), double-space, lowercase, leading-zero variants are all ignored.
+     - Source-level scan on `src/lib/bronzeTitle.ts`: no `import` from `react`, `react-dom`, `react-router-dom`, `zustand`, `dexie`, `../db/db`, or any path under `../db/repos/`. No `Date.now(`. No `window.`.
+  2. **`pages.update` repo function.**
+     - `src/db/repos/pages.ts` exports `update(id: string, changes: Partial<Page>): Promise<void>`.
+     - Called with `update(pageId, { cardIds: ['c1','c2'] })` against a stored Page, the persisted row's `cardIds` deep-equals `['c1','c2']` after the call resolves.
+     - Called with `update(pageId, { reviewedAt: 12345 })` against a stored Page, the persisted row's `reviewedAt === 12345`.
+     - Unlike `cards.update`, `pages.update` does NOT throw when the target Page's `reviewedAt` is already set — the lock is a UI-layer concern. Asserted by calling `pages.update(reviewedPageId, { lastNotifiedAt: 999 })` and confirming it resolves and persists.
+  3. **Per-Book overview — New-Bronze-List affordance.**
+     - `/book/:bookId` renders `getByRole('button', { name: /new bronze list/i })` with `data-testid="new-bronze-list"`. It is always present, regardless of the Page count.
+     - Clicking the button calls `pages.create` exactly once with an object whose:
+       - `id` is a 26-char ULID (`/^[0-9A-HJKMNP-TV-Z]{26}$/`),
+       - `bookId` equals the route's `bookId`,
+       - `title === 'Bronze 1'` when the Book has no existing Bronze Pages,
+       - `tier === 'bronze'`,
+       - `createdAt` is a `number > 0`,
+       - `reviewableAt === createdAt + book.settings.distillationIntervalDays * 86_400_000` — **asserted with a fixture Book whose `distillationIntervalDays` is 7** (not the default 14), so a regression hardcoding `14` fails. Computed equality: e.g. `createdAt + 7 * 86_400_000 === reviewableAt`.
+       - `reviewedAt === undefined`,
+       - `cardIds` deep-equals `[]`.
+     - After `pages.create` resolves, the test asserts navigation to `/list/<that-same-id>` (via `MemoryRouter` history or a sibling probe component).
+     - No intermediate form is shown — there is no `route-new-bronze-list` or similar; the click leads straight to `/list/:pageId`.
+  4. **Per-Book overview — gap-reuse on second create.**
+     - Fixture: a Book containing Pages with titles `'Bronze 1'` and `'Bronze 3'` (i.e. `Bronze 2` was deleted). Clicking New Bronze List calls `pages.create` with `title === 'Bronze 2'`. This AC fails for any implementation that uses `length + 1`, `max + 1`, or a counter on `Book.settings`.
+     - Fixture: a Book containing only `'Silver 1'`. Clicking New Bronze List calls `pages.create` with `title === 'Bronze 1'` — non-Bronze titles do not influence the count.
+  5. **Per-Book overview — existing-Lists rendering.**
+     - A Book containing three Pages with `createdAt` values `[1000, 3000, 2000]` (i.e. middle Page was created last) renders the `page-row-*` items in the order `[3000-id, 2000-id, 1000-id]` (newest-first). Asserted by reading the DOM order of `data-testid^="page-row-"` elements.
+     - Each row contains a link with `href` ending in `#/list/${pageId}` (HashRouter form).
+     - Each row visually applies the tier's border/label via the `TierBorder` and `TierBadge` primitives (asserted by querying for an element whose `className` includes the `borderClass` from `tierVisual(tier)` — substring match, not exact — and an element with `role="status"` whose `aria-label` is the tier's `label`).
+  6. **Per-Book overview — empty state.**
+     - A Book with zero Pages renders `getByTestId('pages-empty')` whose text content matches **exactly** `'No lists yet. Create your first Bronze List to start.'` (full-string regex match). Mutation-killing: a regression that drops the trailing period or swaps "Create" for "Make" fails.
+     - The empty-state copy is NOT rendered when at least one Page exists.
+     - The New-Bronze-List affordance is rendered both with and without existing Pages (independent of the empty state).
+  7. **ListDetail — page header (unreviewed).**
+     - `/list/:pageId` for an unreviewed Bronze Page renders the Page's `title` inside an `<h1>` and a `TierBadge` whose `aria-label === 'Bronze'`.
+     - The route content is wrapped in an element whose `className` contains the bronze `borderClass` substring (so the border colour is bronze-family).
+  8. **ListDetail — Add-Card form is present on unreviewed Page.**
+     - `getByTestId('add-card-form')` is in the DOM.
+     - The form has two inputs accessible as `getByLabelText(/^source$/i)` and `getByLabelText(/^target$/i)`, both initially with `value === ''`.
+     - `getByRole('button', { name: /^add$/i })` is present.
+  9. **ListDetail — Add-Card validation.**
+     - With both inputs empty, clicking Add does NOT call `cards.create` and does NOT call `pages.update`. Both error elements (`error-add-source`, `error-add-target`) appear.
+     - With only Source filled (Target empty, post-trim), clicking Add still does not submit; `error-add-target` is present, `error-add-source` is absent.
+     - Whitespace-only inputs (e.g. `'   '`) are treated as empty.
+     - Typing into a field that has an error clears that field's error element on the next change without affecting the other.
+  10. **ListDetail — Add-Card success.**
+     - Filling both inputs (e.g. Source `'  hello  '`, Target `'  hola  '`) and clicking Add calls `cards.create` exactly once with an object whose:
+       - `id` is a 26-char ULID,
+       - `bookId` matches the Page's `bookId`,
+       - `pageId` matches the route's `pageId`,
+       - `source === 'hello'` and `target === 'hola'` (trimmed),
+       - `createdAt` is `number > 0`,
+       - `archivedAt === undefined`,
+       - `parentIds === undefined` (Bronze cards have no parents).
+     - Calls `pages.update(pageId, { cardIds: [...prevCardIds, newCard.id] })` exactly once, with the new id appended to the existing array. Asserted by reading `db.pages.get(pageId)` after the await.
+     - After the resolve: both inputs clear (`value === ''`), neither error is in the DOM, and `document.activeElement` is the Source input (focus returns).
+     - The new card appears in `getByTestId('cards-list')` with `getByTestId(`card-row-${newId}`)` rendering both strings.
+  11. **ListDetail — Card row Edit affordance.**
+     - For an unreviewed Page with two existing Cards, each `card-row-${cardId}` contains a `card-edit-${cardId}` button.
+     - Clicking Edit on a row replaces the row's source/target text with two inputs prepopulated with the card's current values. Save and Cancel buttons are visible within the row.
+     - Save calls `cards.update(cardId, { source: <trimmed>, target: <trimmed> })` exactly once and exits edit-mode showing the new values. Cancel exits edit-mode showing the original values without calling `cards.update`.
+  12. **ListDetail — Card row Delete affordance.**
+     - For an unreviewed Page with two existing Cards, each `card-row-${cardId}` contains a `card-delete-${cardId}` button.
+     - Clicking Delete calls `cards.remove(cardId)` exactly once and then `pages.update(pageId, { cardIds: <prev minus deleted> })` exactly once.
+     - The row is no longer in the DOM after the awaited deletes.
+     - There is no confirm modal — `getByRole('dialog')` is not in the DOM at any point during the delete flow.
+  13. **ListDetail — Edit/Delete HIDDEN on reviewed Page.**
+     - Fixture: a Page with `reviewedAt = <some number>` and at least two cards.
+     - `queryByTestId('add-card-form')` is `null`.
+     - For every existing card, `queryByTestId(`card-edit-${cardId}`)` and `queryByTestId(`card-delete-${cardId}`)` are both `null`.
+     - `getByTestId('list-locked')` is in the DOM with text matching `/this list has been reviewed and is read-only/i`.
+     - The cards themselves are still rendered (source and target text visible).
+     - This AC is paired with AC-11 / AC-12 — the same selectors must be present in the unreviewed fixture and absent in the reviewed fixture.
+  14. **ListDetail — Headlist-size warning appears at exactly 26 cards.**
+     - Fixture: an unreviewed Page with 25 existing Cards. `queryByTestId('headlist-warning')` is `null`.
+     - Add the 26th Card (via the form). `getByTestId('headlist-warning')` is in the DOM and contains the exact text **"You have 26 cards on this list. The Gold List Method recommends keeping a headlist around 25 entries — longer lists make distillation harder to remember."** (full-string substring match against `textContent`).
+     - The warning is positioned **before** (sibling-order) the `add-card-form` in the DOM. Asserted via `compareDocumentPosition` returning `DOCUMENT_POSITION_FOLLOWING` from warning to form, or via index comparison among the parent's children.
+     - The Card is added normally (i.e. AC-10 still applies — the warning does not gate the submit).
+  15. **ListDetail — Headlist warning dismissal.**
+     - With the warning visible (26 cards), clicking `getByTestId('warning-dismiss')` removes the warning from the DOM (`queryByTestId('headlist-warning')` is `null`).
+     - Adding a 27th Card after dismissal does NOT re-render the warning (`queryByTestId('headlist-warning')` remains `null`).
+     - Adding a 28th, 29th, ... Card does not re-render the warning either.
+  16. **ListDetail — Headlist warning re-arms on remount.**
+     - With 26 cards and the warning dismissed, unmount the route (navigate to `/` then back to `/list/:pageId`), then re-render. `getByTestId('headlist-warning')` is in the DOM again.
+     - Dismissal state is NOT persisted to `localStorage` / `sessionStorage` — asserted by a source-level scan on `src/routes/ListDetail/index.tsx` that the file does not contain the substrings `localStorage` or `sessionStorage`. (ADR-015.)
+  17. **ListDetail — Headlist warning re-fires after delete + re-add.**
+     - Fixture: 25 cards, no warning visible.
+     - Add a 26th — warning appears. Dismiss it.
+     - Delete one card — count goes to 25, warning is not visible (and was not visible at that count anyway).
+     - Add another — count goes to 26 again. Within the **same mount** (no reload), warning does NOT re-appear (dismissal persists per ADR-015).
+     - A separate sub-test: remount the route between the dismiss and the second 26-add, and the warning DOES re-appear at 26. This pair of assertions discriminates "session-scoped dismissal" from "page-id-scoped dismissal" and from "always re-fires".
+  18. **`bronzeTitle.ts` purity scan.**
+     - Source-level assertion in `src/lib/bronzeTitle.test.ts` that the file (read via `import.meta.glob('?raw')`) contains no runtime imports from `react`, `react-dom`, `react-router-dom`, `zustand`, `dexie`, `../db/db`, or `../db/repos/`; no `Date.now(`; no `window.`. Type-only imports are permitted (none expected — the function operates on `string[]` and returns `string`).
+- **Out of scope:**
+  - **Tier-grouped overview layout** (Bronze / Silver / Gold sections), due-date column, and status pill — deferred to **TASK-016**. TASK-011 ships the flat newest-first list per PRD §5.2.4.
+  - **Review flow** (Start Review, due indicators, "Review on demand" button for Gold) — TASK-012 owns this. TASK-011 does not render a Start-Review affordance.
+  - **Distillation Review screen / Builder** — TASK-013 / TASK-014.
+  - **Per-Book `book.settings.headlistSize` override UI** — the threshold reads from `book.settings.headlistSize` (already on the Book row from TASK-010) so the test fixture can vary it, but no UI to edit settings ships here. Settings UI is **TASK-018+**.
+  - **Card reordering** — PRD §5.2 mentions reorder; v1 ships add / edit / delete only. The `Page.cardIds` array's order is the source of truth, but no drag-handle UI ships. Reorder is deferred to a later polish task (not yet numbered).
+  - **Delete an entire List** — PRD §5.2 mentions it; defer (a separate `route-list-detail` affordance is not part of TASK-011's AC). When it lands it will call `pages.remove` (which does not exist yet — also a future task).
+  - **Page-row delete affordance on the per-Book overview** — not in PRD §5.2.4's v1 minimum. Defer to TASK-016 or a dedicated delete task.
+  - **Edit Book name / languages** — separate task.
+  - **Modal usage** — `Modal` primitive ships in TASK-008 but the Bronze-creation flow is router-driven with no modal (the New-Bronze-List button is a direct mutation + navigate). The delete affordance is inline-no-confirm per PRD §5.2.2. TASK-014 is the first user of `Modal`.
 
 ### TASK-012: Flashcard Review flow
 - [ ] Status
-- **Files touched:** `src/routes/Review/index.tsx`, `src/components/Flashcard.tsx`, `src/components/RatingButtons.tsx`, `src/stores/useReviewSessionStore.ts`.
+- **Forward note (from TASK-011 tech-lead pass):** ListDetail's "Start Review" affordance is **not** part of TASK-011. TASK-011 ships an unreviewed-Page editor only. TASK-012 will add the affordance to `src/routes/ListDetail/index.tsx`; the file is targeted at ~250 lines after TASK-011, so the Start-Review button + due-date display + locked-branch logic should fit under the 350-line hard cap. If TASK-012 pushes the file over 250, extract Start-Review into a sibling component (`src/routes/ListDetail/StartReview.tsx`) before submitting. The DOM contract for the Start-Review affordance is NOT locked here; TASK-012's tech-lead pass will lock it. Note also that the locked-branch copy in TASK-011 (`data-testid="list-locked"`) refers to the post-review read-only state; do not conflict the Start-Review affordance with it (a not-yet-due Page is unreviewed AND not started; a reviewed Page is locked; a Gold Page shows "Review on demand"). All three branches will coexist after TASK-012.
+- **Files touched:** `src/routes/Review/index.tsx`, `src/components/Flashcard.tsx`, `src/components/RatingButtons.tsx`, `src/stores/useReviewSessionStore.ts`, `src/routes/ListDetail/index.tsx` (add Start-Review affordance).
 - **Depends on:** TASK-009, TASK-011.
 - **Acceptance criteria:**
   1. ListDetail for a due List shows "Start Review"; for a not-yet-due List, shows the due date and disables Start Review (Gold has "Review on demand" instead).
@@ -258,6 +402,7 @@
 
 ### TASK-013: Distillation Review screen
 - [ ] Status
+- **Forward note (from TASK-011 tech-lead pass):** `flagsForPage` (TASK-004) enumerates `page.cardIds`, which TASK-011 keeps in sync via `pages.update` (ADR-016) on every add / remove during the unreviewed phase. By the time TASK-013 runs, `page.cardIds` is the authoritative ordered list for the Distillation Review screen — read `pages.get(pageId)` and iterate `page.cardIds`, then fetch each Card via `cards.get(cardId)` (or `cards.listByPage(pageId)` and re-order client-side using `page.cardIds`). Do not rely on `cards.listByPage` order alone — the Dexie index returns insertion order, which matches `cardIds` only because TASK-011's add path appends to both in the same order. If a future repo function reorders cards, `page.cardIds` is canon.
 - **Files touched:** `src/routes/Distill/ReviewSummary/index.tsx`.
 - **Depends on:** TASK-012, TASK-004 (flagsForPage), TASK-005 (reviews.latestPerCardForPage).
 - **Acceptance criteria:**
@@ -268,6 +413,7 @@
 
 ### TASK-014: Distillation Builder
 - [ ] Status
+- **Forward note (from TASK-011 tech-lead pass):** Child-Page titles produced by the Builder are NOT computed via `nextBronzeTitle` — that helper is Bronze-specific by design (`^Bronze (\d+)$`). When TASK-014 lands, add a sibling pure helper `nextTitleForTier(tier, existingTitles)` in `src/lib/bronzeTitle.ts` (or rename the module to `src/lib/listTitle.ts` at that point) that generalises the gap-reuse algorithm to `silver` / `gold`. The current `finalizePage` hardcodes `\`${childTier} from ${parent.title}\`` (see TASK-004 second-pass note); TASK-014's tech-lead pass should decide whether to promote `title` to a `finalizePage` argument or to compute it inside the Builder before calling `pages.finalize`. The latter is the natural fit because the Builder owns the user-facing title.
 - **Files touched:** `src/routes/Distill/Builder/index.tsx`, `src/routes/Distill/Builder/AddEntryModal.tsx`, `src/components/Modal.tsx`.
 - **Depends on:** TASK-008, TASK-013.
 - **Acceptance criteria:**
@@ -312,7 +458,7 @@
 - **Files touched:** `src/lib/sync/exportImport.ts`, `src/lib/sync/exportImport.test.ts`, `src/routes/Settings/index.tsx`, `src/routes/Settings/Settings.test.tsx`. The Settings test file may also import `fake-indexeddb/auto` and the repos to assert the import transaction's effects on real Dexie. No new npm dependencies (`Blob`, `URL.createObjectURL`, `File.text()`, `JSON.parse`/`JSON.stringify` are all browser-provided; `fake-indexeddb` is already a dev dep from TASK-003).
 - **Depends on:** TASK-005.
 - **Architectural notes (tech-lead decisions):**
-  - **Module layering (ADR-013).** `src/lib/sync/exportImport.ts` is **pure** — no Dexie, no `window`, no `Date.now()`. Four named exports: `buildExportEnvelope`, `formatExportFilename`, `parseExport`, `validateForeignKeys`. All Dexie I/O lives in the Settings route. The previous draft of the `src/lib/**` purity rule (§3 rule 2) is amended to explicitly mention this file alongside `fileHandle.ts`.
+  - **Module layering (ADR-017).** `src/lib/sync/exportImport.ts` is **pure** — no Dexie, no `window`, no `Date.now()`. Four named exports: `buildExportEnvelope`, `formatExportFilename`, `parseExport`, `validateForeignKeys`. All Dexie I/O lives in the Settings route. The previous draft of the `src/lib/**` purity rule (§3 rule 2) is amended to explicitly mention this file alongside `fileHandle.ts`.
   - **Envelope shape (locked).** The exported JSON has exactly these top-level keys, in this order, with no other keys present:
     ```ts
     type ExportEnvelope = {
@@ -369,7 +515,7 @@
     3. For each `Card` in `envelope.cards`, in array order: if `bookIds.has(card.bookId) === false` OR `pageIds.has(card.pageId) === false`, return `{ ok: false, error: { kind: 'fk-missing' } }`.
     4. For each `ReviewEvent` in `envelope.reviews`, in array order: if `cardIds.has(ev.cardId) === false` OR `pageIds.has(ev.pageId) === false`, return `{ ok: false, error: { kind: 'fk-missing' } }`.
     5. Otherwise → `{ ok: true }`.
-    `Page.parentPageId`, `Page.childPageId`, and `Card.parentIds` are NOT validated — see ADR-013 for the reason.
+    `Page.parentPageId`, `Page.childPageId`, and `Card.parentIds` are NOT validated — see ADR-017 for the reason.
   - **Import transaction shape (locked).** The Settings route runs:
     ```ts
     await db.transaction('rw', [db.books, db.pages, db.cards, db.reviews], async () => {
@@ -455,7 +601,7 @@
   - CSV, Anki `.apkg`, or any non-JSON interchange format.
   - Automated / scheduled exports.
   - Per-row warnings beyond the single overwritten count.
-  - Validation of `Page.parentPageId`, `Page.childPageId`, `Card.parentIds` (ADR-013 explicitly excludes these for v1).
+  - Validation of `Page.parentPageId`, `Page.childPageId`, `Card.parentIds` (ADR-017 explicitly excludes these for v1).
   - Pluralisation of count strings (`1 books` is acceptable for v1).
   - The 5-second auto-clear timing of the status line (presence is asserted; the timer is presentational polish).
 
@@ -480,14 +626,40 @@
   4. Settings includes iOS-limitation copy when running on Safari.
 
 ### TASK-021: PWA icons, manifest polish, update prompt
-- [ ] Status
-- **Files touched:** `public/icons/*` (real icons), `vite.config.ts` (manifest details), `src/components/UpdatePrompt.tsx`.
+- [✓] Status — complete (2026-05-23). QA Engineer wrote 34 new tests across two files: `src/components/UpdatePrompt.test.tsx` (12 tests) covering AC-3 (live-region landmark with reload-action accessible name `/reload/i` when `needRefresh = true`; nothing rendered when `needRefresh = false`), AC-4 (distinct dismiss control with accessible name matching `/dismiss|not now|later|close/i`), AC-5 (zero `updateServiceWorker` calls after render and after a `await Promise.resolve()` microtask flush; exactly one call with argument `true` after `userEvent.click` on the reload action), AC-6 (dismiss click removes the reload action from the DOM and the `updateServiceWorker` spy stays at zero), and `src/pwa/manifest.test.ts` (22 tests, new directory) covering AC-1 (existence + `>500` byte length per icon, read via `import.meta.glob('?inline')` rather than `node:fs` to avoid pulling in `@types/node` — future tests that need to read repo files should follow this same pattern), AC-2 (all seven required field names present in the manifest source), AC-7 (exact PRD-aligned values: `name = "Gold List Plus"`, `short_name = "GoldList+"`, `theme_color = "#D4AF37"`, `background_color = "#0b0b0c"`, `display = "standalone"`, `orientation = "any"`, and `description.length > 0`), AC-8 (source-level scan that `Layout.tsx` imports `UpdatePrompt` and references the JSX element exactly once). Total suite is now 387/387 passing across 20 files. Implementer made them pass with a new `src/components/UpdatePrompt.tsx` (36 non-blank lines — well under the 200 soft / 300 hard component cap) using `useRegisterSW` from `virtual:pwa-register/react`, a local `dismissed` boolean state, and click-driven `updateServiceWorker(true)` invocation; edited `src/routes/Layout.tsx` to mount `<UpdatePrompt/>` exactly once after `{children}` so the toast is reachable from every screen; edited `tsconfig.app.json` to add `"vite-plugin-pwa/client"` to `compilerOptions.types` so `virtual:pwa-register/react` resolves under TS strict. ADR-013 governs the update flow (added in this task's first pass: `registerType: 'autoUpdate'` stays, activation is user-gated, dismissal is session-only); PRD §5.12 added by Product Designer in the first pass to document the user-facing update affordance. Code Reviewer approved; second-pass QA confirmed mutation-resistant coverage by dispatching three specific mutations against the green code and confirming each is killed: (1) dropping the `dismissed` local state so the toast cannot be hidden — killed by AC-6's "reload action no longer in DOM after dismiss click" assertion; (2) calling `updateServiceWorker()` without the `true` argument — killed by AC-5's exact-argument assertion (`toHaveBeenCalledWith(true)`); (3) wiring `updateServiceWorker(true)` into a `useEffect` that fires on `needRefresh` becoming true rather than on the reload button's `onClick` — killed by AC-5's "zero calls after render + microtask flush" assertion. Second-pass Tech Lead audit clean: §3 layering intact (`UpdatePrompt.tsx` imports only `react` and `virtual:pwa-register/react`; no Dexie, no repos, no stores, no `src/lib/**`); §6 file-size discipline clear with significant headroom (largest new production file is `UpdatePrompt.tsx` at 36 non-blank lines vs 200 soft / 300 hard component cap; `src/routes/Layout.tsx` and `tsconfig.app.json` are single-line additions); §7 dependency ledger unchanged (no new runtime or dev dependency — `vite-plugin-pwa` was added in TASK-002 and already ships `virtual:pwa-register/react` and the `vite-plugin-pwa/client` triple-slash module); ADR-004 (HashRouter), ADR-008 (route shell), ADR-013 (user-gated SW activation) all honoured; PRD §5.12 honoured; sacred rules untouched (no backend, no auto-built next list, no tier or rating changes, no derived state); no `any`, no `@ts-ignore`, no `eslint-disable`, named exports throughout. AC-9 (Lighthouse PWA score ≥ 90) is the documented manual close-out and is NOT enforced by automated tests; it must be run on the deployed build after the PR merges to GitHub Pages via `npm run build && npm run preview` (or against the deployed `https://xferguson.github.io/GoldListPlus/` URL post-TASK-022). The score will be recorded as a follow-up edit appended to this Status line once the user runs the audit; a score below 90 reopens this task. Forward note for TASK-022 (GitHub Actions deploy): no carry-over from TASK-021 — the SW update flow is fully client-side, the deploy workflow only ships the static bundle and Workbox handles the rest. Forward note for TASK-020 (Notifications): if Notifications and the Update Prompt both want to live-announce concurrently inside `Layout.tsx`, the toast container may need a stack policy (z-index ordering, mutual-exclusion, or vertical stacking). Out of scope for TASK-021 — flagged for whoever implements TASK-020 first. Forward note for any future task that wants to persist dismissal state across sessions: ADR-013's dismissal paragraph would need amendment first (currently dismissal is explicitly session-only and reactivation happens on next cold open via standard Workbox behaviour); do not silently add a `localStorage` write to `UpdatePrompt.tsx` without first updating the ADR.
+- **Files touched:** `vite.config.ts` (manifest field values — already shaped correctly, AC pins the values), `src/components/UpdatePrompt.tsx` (new), `src/components/UpdatePrompt.test.tsx` (new), `src/routes/Layout.tsx` (mount `<UpdatePrompt/>` once inside the global layout — see ADR-013), `tsconfig.app.json` (add `vite-plugin-pwa/client` to `compilerOptions.types` so `virtual:pwa-register/react` resolves under TS strict). Icons at `public/icons/icon-192.png`, `public/icons/icon-512.png`, `public/icons/icon-512-maskable.png` are NOT regenerated — the concentric-ring PNGs already produced by `scripts/generate-icons.mjs` are the v1 icons.
 - **Depends on:** TASK-002.
+- **Architectural notes (tech-lead decisions):**
+  - **ADR-013** governs the update flow. `registerType: 'autoUpdate'` stays; activation is user-gated by `<UpdatePrompt/>` calling `updateServiceWorker(true)` from `virtual:pwa-register/react`. Dismissal hides the toast for the session without activating the new SW. Read ADR-013 before writing tests.
+  - **Lighthouse PWA audit is a manual close-out step**, not a CI gate. `@lhci/cli` is scope creep for a single-developer static-site v1. Procedure: after the implementer's PR is green on tests, run `npm run build && npm run preview` locally, open the preview URL in Chrome (incognito, no extensions), DevTools → Lighthouse → category "Progressive Web App" → "Analyze page load" against the served bundle. Record the score in this task's Status line on completion (`[✓] Status — complete (YYYY-MM-DD). Lighthouse PWA: NN.`). A score below 90 kicks back to the implementer.
+  - **Icons are out of scope for regeneration.** AC-8 asserts existence + non-trivial file size. Do not re-run `scripts/generate-icons.mjs`.
+  - **No new runtime dependency.** `vite-plugin-pwa` already ships `virtual:pwa-register/react` and the `vite-plugin-pwa/client` types triple-slash module. §8 dependency ledger is unchanged.
+  - **Testing without a real SW:** the standard pattern is to `vi.mock('virtual:pwa-register/react', () => ({ useRegisterSW: vi.fn() }))` at the top of `UpdatePrompt.test.tsx`, then per-test set the mock's return value to control `needRefresh` and capture the `updateServiceWorker` spy. The component under test is rendered with `@testing-library/react`; no real service worker is registered. AC-3/5/6 test the component's behaviour against the mock's outputs, not against Workbox itself.
+  - **Manifest assertion strategy (AC-7):** the QA Engineer's call between reading `vite.config.ts` as text vs. importing the resolved manifest. Reading as text (e.g. `readFileSync('vite.config.ts', 'utf-8')` + regex/substring asserts per field) is robust to refactor noise and does not require running the Vite plugin pipeline in the test environment; that is the recommended approach. If the QA Engineer prefers an import-based assertion, a `manifest` constant may be lifted out of `vite.config.ts` and re-exported from a sibling file the test can import — but this is the heavier path.
 - **Acceptance criteria:**
-  1. 192, 512, and maskable 512 icons present.
-  2. Manifest fields: name, short_name, description, theme_color, background_color, display=standalone, orientation=any.
-  3. When SW detects an update, a non-blocking toast offers "Reload to update".
-  4. Lighthouse PWA audit ≥ 90 on installability, offline, manifest.
+  1. **Icons exist with non-trivial size.** The three files `public/icons/icon-192.png`, `public/icons/icon-512.png`, `public/icons/icon-512-maskable.png` all exist on disk and each has byte length `> 500`. Tested via `fs.statSync(path).size > 500` per file. Icons are NOT regenerated by this task; the existing concentric-ring PNGs are the v1 icons.
+  2. **Manifest field set is present.** The manifest configured in `vite.config.ts` contains all seven required fields by name: `name`, `short_name`, `description`, `theme_color`, `background_color`, `display`, `orientation`. (AC-7 pins the exact values; this AC just asserts presence so the assertion still passes if a value is tuned later within the PRD constraints.)
+  3. **Update toast renders a reload-themed action.** When `useRegisterSW` reports `needRefresh = true`, `<UpdatePrompt/>` renders a visible region (e.g. `role="status"` or `role="alert"` — implementer's choice, must be a landmark/live region so the toast is announced) containing an action button whose accessible name matches `/reload/i`. When `needRefresh = false`, the toast renders nothing (asserted via `queryBy*` returning null). Test mocks `virtual:pwa-register/react` per the architectural note.
+  4. **Update toast also exposes a dismiss control.** When `needRefresh = true`, the toast renders a second control whose accessible name matches `/dismiss|not now|later|close/i` (any of those, implementer's choice). This control is distinct from the reload action.
+  5. **No auto-reload.** Merely rendering `<UpdatePrompt/>` with `needRefresh = true` does NOT call `updateServiceWorker`. Asserted by mounting the component with the mocked hook and verifying the `updateServiceWorker` spy has zero calls after render and after a microtask flush (`await Promise.resolve()`). Only an explicit user click on the reload action invokes `updateServiceWorker(true)` (asserted by `userEvent.click` then verifying exactly one call with the argument `true`).
+  6. **Dismissal hides the toast without activating the SW.** Clicking the dismiss control hides the toast (the reload action is no longer in the DOM after the click) AND does NOT call `updateServiceWorker` (the spy stays at zero calls). The new SW remains waiting; reactivation happens on the next cold open via standard Workbox behaviour.
+  7. **Manifest field values are PRD-aligned.** Asserted against the manifest configured in `vite.config.ts` (read as text or via a lifted constant, see architectural note). Required values:
+     - `name` equals `"Gold List Plus"`
+     - `short_name` equals `"GoldList+"`
+     - `description` is a non-empty string (no fixed copy — implementer may tune; assertion is `description.length > 0`)
+     - `theme_color` equals `"#D4AF37"` (PRD §4 Gold border colour)
+     - `background_color` equals `"#0b0b0c"`
+     - `display` equals `"standalone"`
+     - `orientation` equals `"any"`
+     - (Pre-existing constraints from TASK-002 also remain: `scope` and `start_url` both equal `/GoldListPlus/`, and three icon entries with sizes `192x192`, `512x512`, `512x512` + `purpose: 'maskable'` — those are NOT re-asserted here; this AC is about the seven new fields above.)
+  8. **`<UpdatePrompt/>` is mounted in `Layout.tsx`.** `src/routes/Layout.tsx` renders `<UpdatePrompt/>` exactly once. Asserted by a source-level scan that `Layout.tsx` imports `UpdatePrompt` and references the JSX element. The toast is therefore reachable from every screen without each route having to opt in.
+  9. **Lighthouse PWA audit ≥ 90 — manual close-out verification.** Run `npm run build && npm run preview`, open the preview URL in Chrome DevTools → Lighthouse → category "Progressive Web App", record the score in this task's Status line on completion. A score below 90 kicks back to the Implementer. This AC is NOT enforced by automated tests; it is the documented close-out procedure.
+- **Out of scope:**
+  - Regenerating PWA icons (the concentric-ring PNGs from `scripts/generate-icons.mjs` are the v1 icons).
+  - Adding `@lhci/cli` or any other Lighthouse-in-CI tooling (deferred until multi-developer workflow demands it).
+  - Persisting the "user dismissed the toast" decision across reloads (per ADR-013, dismissal is session-only; reactivation on next cold open is the documented behaviour).
+  - Animations, slide-in transitions, or styling the toast beyond what Tailwind utilities permit on a single component.
+  - Adding an `id` field to the manifest (revisit if Chrome / Edge installability flags an issue during the manual Lighthouse pass — see Open Question to main thread).
 
 ### TASK-022: GitHub Actions deploy
 - [ ] Status

@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react';
 import { NavLink } from 'react-router-dom';
+import { UpdatePrompt } from '../components/UpdatePrompt';
 
 export function Layout({ children }: { children: ReactNode }) {
   return (
@@ -23,6 +24,7 @@ export function Layout({ children }: { children: ReactNode }) {
         </nav>
       </header>
       {children}
+      <UpdatePrompt />
     </>
   );
 }
