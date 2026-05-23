@@ -37,7 +37,7 @@ src/
 │   ├── defaults.ts              # app-wide default constants (DEFAULT_BOOK_SETTINGS, NAME_MAX)
 │   ├── time.ts                  # pure date math helpers
 │   ├── sync/
-│   │   ├── exportImport.ts      # versioned JSON dump + restore
+│   │   ├── exportImport.ts      # pure: buildExportEnvelope, formatExportFilename, parseExport, validateForeignKeys
 │   │   └── fileHandle.ts        # File System Access pinned-file
 │   └── notifications.ts         # permission, on-open notifier, TimestampTrigger feature-detect
 ├── stores/
@@ -68,7 +68,7 @@ src/
 ## 3. Layering rules (enforced in review)
 
 1. **UI never imports Dexie or `src/db/db.ts` directly.** UI imports repos.
-2. **`src/lib/**` (except `src/lib/sync/fileHandle.ts`) is pure.** No React, no Dexie, no `window` access.
+2. **`src/lib/**` (except `src/lib/sync/fileHandle.ts`) is pure.** No React, no Dexie, no `window` access. `src/lib/sync/exportImport.ts` is also pure — it operates on plain `ExportEnvelope` payloads passed in/out; the Dexie I/O lives in the Settings route caller (see ADR-013).
 3. **Repos own all Dexie I/O.** They expose typed async functions that return plain objects, never `Table` instances or `Collection`s.
 4. **Zustand stores hold only ephemeral session state.** Persistent data lives in IndexedDB. Stores may cache reads but never become the source of truth.
 5. **`finalizePage`** in `src/lib/distillation.ts` returns a *plan* (new List + new Cards + parent-archive list). A repo function `pages.finalize(plan)` executes the plan inside a single Dexie transaction.
@@ -211,6 +211,36 @@ Notes:
 **Alternatives considered:** (a) park defaults on `useAppStore` as `defaultBookSettings` so the eventual Settings UI mutates one store slice; (b) inline literals in the NewBook form.
 **Why a pure constants module:** (a) §3 rule 4 says stores hold ephemeral state, not domain constants; (b) `src/lib/**` is the canonical home for pure values and §2 already lists it; (c) when Settings (§5.10) lands and defaults become user-overridable, the override will be stored in IndexedDB (a `settings` table or a `books`-level fallback), not in a Zustand store — the constants in `defaults.ts` become the *fallback* the persisted overrides shadow. No store refactor is forced by that future change. (d) Inlining in NewBook duplicates the values once §5.10 ships.
 **Layering note:** `defaults.ts` may `import type` from `src/db/db.ts` (matches the §2 rule that `src/lib/**` imports types from `db/db.ts`). No runtime imports.
+
+### ADR-013: `exportImport.ts` is pure; Settings route owns Dexie I/O and the import transaction
+**Decision:** `src/lib/sync/exportImport.ts` is pure and contains four named exports:
+- `buildExportEnvelope({ books, pages, cards, reviews, exportedAt }): ExportEnvelope` — assembles the versioned JSON payload from in-memory row arrays. Does NOT call `Date.now()`; `exportedAt` is passed in by the caller.
+- `formatExportFilename(exportedAt: number): string` — returns `goldlistplus-backup-YYYYMMDD-HHmmss.json` (UTC, zero-padded). Pure derivation from the same `exportedAt` the envelope carries.
+- `parseExport(input: unknown): ParseResult` where `ParseResult = { ok: true; envelope: ExportEnvelope } | { ok: false; error: ImportError }` and `ImportError` is a discriminated union `{ kind: 'invalid-json' } | { kind: 'not-a-backup' } | { kind: 'newer-version' }`. The function takes already-parsed `unknown` (the caller does the `JSON.parse` inside a try/catch and converts a throw into `{ kind: 'invalid-json' }`); `parseExport` itself never throws.
+- `validateForeignKeys(envelope, dbRows): { ok: true } | { ok: false; error: { kind: 'fk-missing' } }` — given the file's envelope plus the **current DB rows** (book ids, page ids, card ids passed in as `Set<string>` parameters), checks every `Page.bookId`, every `Card.bookId`, every `Card.pageId`, every `ReviewEvent.cardId`, and every `ReviewEvent.pageId` resolves to a row in either the file or the DB. Returns on the first violation (no batched report — keeps the function small and the UI copy single-string). `Page.parentPageId`, `Page.childPageId`, and `Card.parentIds` are **not** validated in v1: archived parent rows may legitimately have been removed from a partial export-then-restore-elsewhere flow, and the PRD does not lock copy for these cases.
+
+The Settings route (`src/routes/Settings/index.tsx`) is the only caller. It:
+1. Reads all four tables via repos (`books.list`, `pages.listByBook` for each book — or a dedicated `pages.listAll()` helper if the loop is awkward — `cards` and `reviews` analogously). It is permitted to import `src/db/db.ts` directly for full-table reads if the existing repo surface is insufficient; preference is to add a thin `listAll()` to each repo rather than reach into `db` from the route. See §2 module map for the chosen path.
+2. Calls `buildExportEnvelope(...)` with `Date.now()`.
+3. Triggers download via `Blob` + `URL.createObjectURL` + a synthesised `<a download>` click. Revokes the object URL after click.
+
+For Import, the route:
+1. Reads the picked `File` via `await file.text()`.
+2. Wraps `JSON.parse(...)` in try/catch → `{ kind: 'invalid-json' }` on throw.
+3. Passes the parsed `unknown` to `parseExport`.
+4. On `ok: true`, reads existing DB ids (one `db.transaction('r', ...)` or four `repo.listAll()` calls), calls `validateForeignKeys(envelope, { bookIds, pageIds, cardIds })`.
+5. On `ok: true`, shows the confirm modal.
+6. On confirm, runs a single `db.transaction('rw', [db.books, db.pages, db.cards, db.reviews], async () => { ... })` that:
+   - For each of the four tables, walks the file's rows and calls `table.put(row)` (Dexie `put` is upsert by primary key). Counts pre-write `table.get(id) !== undefined` to populate the "overwritten" tally.
+   - Any thrown error inside the transaction body causes Dexie to roll back the whole transaction — no half-import.
+7. After commit, shows the success status line.
+
+**Why pure + thin caller (alternative considered: extend the `src/lib/**` carve-out to let `exportImport.ts` call repos):**
+- Carving out a second exception just to host four functions that each do one I/O call inverts the layering: the pure helpers (envelope builder, filename formatter, validator) are independently unit-testable against in-memory fixtures with zero Dexie scaffolding, which is the bulk of the test surface QA needs to lock down. The remaining glue is the Settings route, which is already a UI layer and gets its DB integration tests as part of the route's test file.
+- It also keeps `fileHandle.ts` (TASK-019) the sole `src/lib/sync/*` module that genuinely needs the `window` carve-out (for `showOpenFilePicker`), so the rule reads cleanly as "one exception, one reason."
+- The transaction boundary (one `db.transaction('rw', [all four tables], ...)`) is the same shape ADR-005 locked for `pages.finalize`: atomicity is a property of the Dexie call site, not of the pure logic that prepared the plan.
+
+**Out of scope for v1 (carry forward in TASKS.md):** field-level merge, per-row warnings, partial export, encryption, scheduled auto-sync (deferred to TASK-019 / FSA).
 
 ## 6. Cross-cutting rules
 
