@@ -48,7 +48,7 @@ src/
 │   ├── Layout.tsx               # global header/nav shell wrapping <Routes>
 │   ├── Dashboard/
 │   ├── Book/                    # per-Book overview (index.tsx) + NewBook.tsx (/book/new)
-│   ├── ListDetail/              # index.tsx + AddCardForm.tsx + CardRow.tsx (TASK-011)
+│   ├── ListDetail/              # index.tsx (CardRow inline) + AddCardForm.tsx (TASK-011)
 │   ├── Review/                  # flashcard flow
 │   ├── Distill/
 │   │   ├── ReviewSummary/       # post-review flag screen
