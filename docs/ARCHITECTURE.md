@@ -55,7 +55,7 @@ src/
 │   │   ├── Builder/             # next-list builder
 │   │   └── GoldSummary/         # read-only end-of-review screen for Gold (no Builder)
 │   ├── Stats/
-│   ├── Settings/
+│   ├── Settings/                # index.tsx + syncActions.ts (Dexie I/O for export/import, ADR-017)
 │   └── NotFound.tsx             # wildcard catch-all
 ├── components/
 │   ├── TierBadge.tsx
