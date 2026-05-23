@@ -27,7 +27,7 @@ The main thread's job is **orchestration**: dispatch the right subagent for the 
 
 **Always finish a task by pushing the branch and opening a PR** once all reviews (Code Reviewer + second-pass QA + Tech Lead + Product Designer) have approved. The PR is where the user reads every reviewer's verdict in one place and leaves feedback. Do not stop at "committed locally" — push and open the PR by default. Use `gh pr create` against `main`; mirror the TASK-003 / PR #1 style.
 
-**Sync with `origin/main` before pushing.** Run `git fetch origin && git merge origin/main` after the implementer reports green, before `git push`. Parallel PRs grab the same "next free" number (ADRs, TASKs, future migrations) — collisions are cheaper to resolve pre-push than mid-review. When adding an ADR, the tech-lead should also check `git log origin/main -- docs/ARCHITECTURE.md` for ADR numbers shipped after the branch forked.
+**Sync with `origin/main` before pushing.** Run `git fetch origin && git merge origin/main` after the implementer reports green, before `git push`. Parallel PRs grab the same "next free" number (ADRs, TASKs, future migrations) — collisions are cheaper to resolve pre-push than mid-review. When adding an ADR, the tech-lead should also check `git log origin/main -- docs/ARCHITECTURE.md` for ADR numbers shipped after the branch forked. **If any merge surfaces conflicts, stop and confirm the resolution plan with the user before editing the conflicted files** — even when the fix looks mechanical. Show the conflict, propose options, wait for the call.
 
 ## Sacred product rules (PRD §8 — never violate)
 
