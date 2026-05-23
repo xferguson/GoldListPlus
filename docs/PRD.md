@@ -167,6 +167,12 @@ The tier label and the colour border are both required — colour alone is not a
 - Where Notification Triggers API is supported (Chromium), schedule a `TimestampTrigger` at each new non-Gold List's `reviewableAt`.
 - iOS reality: without a backend, no true Web Push. Notifications fire only on app open. Surface this in Settings copy.
 
+### 5.12 App update prompt
+- When the service worker detects a new build, the app shows a **non-blocking toast** offering the user an explicit action to reload into the new version. The toast does NOT auto-reload — Gold List Method work (mid-review ratings, in-flight Distillation Builder state) must never be lost to a silent refresh.
+- The toast is dismissible. Dismissing keeps the user on the current version until the next app open, at which point the new SW takes over normally.
+- Copy guidance (implementer may match in spirit, exact wording not locked): toast text should name the situation ("A new version is available") and the action button should be a verb-led label such as "Reload to update". The action button is the primary affordance; dismiss is secondary.
+- The toast is purely a UI surface for the SW update lifecycle; it does not gate any other functionality.
+
 ## 6. Non-functional requirements
 
 - **Offline-first.** App fully usable without network after first load.
