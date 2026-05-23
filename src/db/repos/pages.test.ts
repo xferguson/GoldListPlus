@@ -329,3 +329,103 @@ describe('pages.finalize (TASK-005 AC-3)', () => {
     expect(collidingAfter).toEqual(collidingPage);
   });
 });
+
+// ---------------------------------------------------------------------------
+// TASK-011 AC-2: pages.update — unconditional partial update.
+//
+// Distinguishes itself from cards.update (which throws when the parent page is
+// reviewed). pages.update is the route-layer mechanism for keeping
+// Page.cardIds in sync after a Card add/remove on an unreviewed Page. ADR-015.
+//
+// Each test seeds via pages.create (positive presence), calls pages.update,
+// reads back via pages.get, and asserts the persisted row. The lock-bypass
+// test additionally proves the absence of the cards.update lock check.
+// ---------------------------------------------------------------------------
+
+describe('TASK-011 AC-2: pages.update — partial update persists changes', () => {
+  it('TASK-011 AC-2: pages.update with { cardIds: ["c1","c2"] } persists the array', async () => {
+    const page = makePage({ cardIds: [] });
+    await pages.create(page);
+
+    await pages.update(page.id, { cardIds: ['c1', 'c2'] });
+
+    const fetched = await pages.get(page.id);
+    expect(fetched).toBeDefined();
+    // Deep-equal — kills "passes a [c1] singleton" or "appends to existing".
+    expect(fetched?.cardIds).toEqual(['c1', 'c2']);
+    // Untouched fields remain.
+    expect(fetched?.id).toBe(page.id);
+    expect(fetched?.bookId).toBe(page.bookId);
+    expect(fetched?.title).toBe(page.title);
+  });
+
+  it('TASK-011 AC-2: pages.update with { reviewedAt: 12345 } persists the value', async () => {
+    const page = makePage();
+    await pages.create(page);
+
+    await pages.update(page.id, { reviewedAt: 12345 });
+
+    const fetched = await pages.get(page.id);
+    expect(fetched?.reviewedAt).toBe(12345);
+  });
+
+  it('TASK-011 AC-2: pages.update preserves untouched fields (only changes are merged)', async () => {
+    // kills: a buggy implementation that calls db.pages.put(changes), wiping
+    // every other column. Dexie's table.update is the correct primitive.
+    const page = makePage({
+      title: 'Bronze 7',
+      cardIds: ['a', 'b'],
+      reviewableAt: 9_999_999_999,
+    });
+    await pages.create(page);
+
+    await pages.update(page.id, { cardIds: ['a', 'b', 'c'] });
+
+    const fetched = await pages.get(page.id);
+    expect(fetched?.title).toBe('Bronze 7');
+    expect(fetched?.reviewableAt).toBe(9_999_999_999);
+    expect(fetched?.cardIds).toEqual(['a', 'b', 'c']);
+  });
+
+  it('TASK-011 AC-2: pages.update on a reviewed Page resolves (no lock — unlike cards.update)', async () => {
+    // The crucial discriminator from cards.update. The locked-Page invariant
+    // is enforced at the UI / route layer (ListDetail hides affordances); the
+    // repo function itself MUST NOT throw. Picking cardIds as the field
+    // (it's a real Page field, unlike a hypothetical lastNotifiedAt which
+    // DOES exist on the type — but we use cardIds anyway because it's the
+    // realistic call site).
+    const reviewedPage = makePage({
+      reviewedAt: 1_700_000_000_000,
+      cardIds: ['existing'],
+    });
+    await pages.create(reviewedPage);
+
+    // Must resolve, not reject. If the implementer ports the cards.update
+    // assertPageUnlocked guard into pages.update, this rejects and the test
+    // fails — exactly the contract from ADR-015.
+    await expect(
+      pages.update(reviewedPage.id, { cardIds: ['existing', 'late-add'] }),
+    ).resolves.toBeUndefined();
+
+    const fetched = await pages.get(reviewedPage.id);
+    expect(fetched?.cardIds).toEqual(['existing', 'late-add']);
+    // And reviewedAt was not clobbered.
+    expect(fetched?.reviewedAt).toBe(1_700_000_000_000);
+  });
+
+  it('TASK-011 AC-2: pages.update on a reviewed Page also accepts lastNotifiedAt updates (covers reminder path)', async () => {
+    // lastNotifiedAt is a defined optional field on Page (db.ts), so a
+    // future reminders flow would call pages.update with it. The lock-bypass
+    // must allow this — asserted with discriminating data (the field was
+    // unset, the update sets it).
+    const reviewedPage = makePage({
+      reviewedAt: 1_700_000_000_000,
+    });
+    await pages.create(reviewedPage);
+
+    await pages.update(reviewedPage.id, { lastNotifiedAt: 999 });
+
+    const fetched = await pages.get(reviewedPage.id);
+    expect(fetched?.lastNotifiedAt).toBe(999);
+  });
+});

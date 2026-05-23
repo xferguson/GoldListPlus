@@ -22,6 +22,10 @@ export async function listDue(now: number): Promise<Page[]> {
   return candidates.filter((p) => p.reviewedAt === undefined);
 }
 
+export async function update(id: string, changes: Partial<Page>): Promise<void> {
+  await db.pages.update(id, changes);
+}
+
 export async function finalize(plan: FinalizePlan): Promise<void> {
   const parentPageId = plan.childPage.parentPageId;
   if (parentPageId === undefined) {
