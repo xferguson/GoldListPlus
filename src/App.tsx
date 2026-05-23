@@ -2,6 +2,7 @@ import { HashRouter, Routes, Route } from 'react-router-dom';
 import { Layout } from './routes/Layout';
 import { Dashboard } from './routes/Dashboard';
 import { Book } from './routes/Book';
+import { NewBook } from './routes/Book/NewBook';
 import { ListDetail } from './routes/ListDetail';
 import { Review } from './routes/Review';
 import { ReviewSummary } from './routes/Distill/ReviewSummary';
@@ -16,6 +17,7 @@ export function AppRoutes() {
     <Layout>
       <Routes>
         <Route path="/" element={<Dashboard />} />
+        <Route path="/book/new" element={<NewBook />} />
         <Route path="/book/:bookId" element={<Book />} />
         <Route path="/list/:pageId" element={<ListDetail />} />
         <Route path="/review/:pageId" element={<Review />} />

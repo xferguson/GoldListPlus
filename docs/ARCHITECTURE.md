@@ -34,6 +34,7 @@ src/
 ├── lib/
 │   ├── distillation.ts          # pure: flagCardForDistillation, flagsForPage, nextTier, finalizePage
 │   ├── tiers.ts                 # tier constants, visual mapping (colour, label, border)
+│   ├── defaults.ts              # app-wide default constants (DEFAULT_BOOK_SETTINGS, NAME_MAX)
 │   ├── time.ts                  # pure date math helpers
 │   ├── sync/
 │   │   ├── exportImport.ts      # versioned JSON dump + restore
@@ -45,7 +46,7 @@ src/
 ├── routes/
 │   ├── Layout.tsx               # global header/nav shell wrapping <Routes>
 │   ├── Dashboard/
-│   ├── Book/                    # per-Book overview
+│   ├── Book/                    # per-Book overview (index.tsx) + NewBook.tsx (/book/new)
 │   ├── ListDetail/
 │   ├── Review/                  # flashcard flow
 │   ├── Distill/
@@ -182,7 +183,9 @@ Notes:
 **Why:** Manual rewriting is the *point* of the method. Pre-filling defeats it. PRD §8 sacred rule #1.
 
 ### ADR-008: Flat route table; Layout wraps `<Routes>`
-**Decision:** The route tree is a single flat `<Routes>` with no nested `<Route>` parents. A `routes/Layout.tsx` component renders the persistent header/nav around `<Routes>` (or via an `<Outlet/>` if a one-level wrapper is later introduced). Paths are stable: `/`, `/book/:bookId`, `/list/:pageId`, `/review/:pageId`, `/distill/review/:pageId`, `/distill/builder/:parentId`, `/distill/gold/:pageId`, `/stats`, `/settings`, `*`.
+**Decision:** The route tree is a single flat `<Routes>` with no nested `<Route>` parents. A `routes/Layout.tsx` component renders the persistent header/nav around `<Routes>` (or via an `<Outlet/>` if a one-level wrapper is later introduced). Paths are stable: `/`, `/book/new`, `/book/:bookId`, `/list/:pageId`, `/review/:pageId`, `/distill/review/:pageId`, `/distill/builder/:parentId`, `/distill/gold/:pageId`, `/stats`, `/settings`, `*`.
+
+**Amendment (TASK-010):** `/book/new` added as a dedicated static route, registered **before** `/book/:bookId` so the literal `"new"` segment does not match the param route. The route renders `routes/Book/NewBook.tsx`. Chosen over a Dashboard-modal pattern because (a) the `Modal` primitive does not ship until TASK-008 (TASK-010 depends only on TASK-005 + TASK-007); (b) the form benefits from deep-linkability and back-button navigation; (c) router-driven tests are cleaner than modal-state tests for an early vertical slice.
 **Alternatives considered:** Nested routes with a `Book` parent owning `ListDetail` children; a file-system convention (TanStack Router / Remix style).
 **Why flat:** The screens have no shared layout *beyond* the global header — a `Book` route is not a visual frame around `ListDetail`; they are sibling views you navigate between. Flat routes keep `App.tsx` legible, keep params local to each screen, and avoid `useOutletContext` plumbing for data already loaded via repos. The placeholder route IDs are an API contract for tests (`data-testid="route-…"`) so the QA Engineer can write router tests in TASK-007 without coupling to component internals.
 
@@ -202,6 +205,12 @@ Notes:
 **Alternatives considered:** Returning raw values (e.g. `{ label, borderColor: '#B87333', borderWidthPx: 4 }`) so consumers set inline `style` directly. An earlier draft of TASK-008 specified exactly that shape.
 **Why class strings:** (a) Tailwind's JIT sees the class names at build time, so the colours live in the design system rather than in scattered hex literals; (b) dark-mode / theme variants (TASK-021 polish) can layer additional class tokens onto the existing fields without touching consumers; (c) inline `style` would bypass Tailwind utility composition for borders elsewhere (e.g. `border-4 rounded-lg` on the wrapper). The PRD §4 palette is honoured semantically (bronze→amber, silver→slate, gold→yellow) and is asserted by TASK-006 AC-4's allow-set regex, which lets the exact shade be tuned without rewriting tests.
 **Status:** Supersedes the draft hex+pixel contract that TASK-008 originally listed before TASK-006 shipped. TASK-008 is now a pure consumer of `tierVisual`.
+
+### ADR-012: App-wide defaults live in `src/lib/defaults.ts`, not in a store
+**Decision:** Constants that are "the same for every user until Settings (§5.10) ships" live as exported constants in `src/lib/defaults.ts`. For TASK-010 this is `DEFAULT_BOOK_SETTINGS: BookSettings` (`distillationIntervalDays: 14`, `headlistSize: 25`, `autoDropOnHard: false`, `autoDropOnModerate: true`, `autoDropOnEasy: true`) and `BOOK_NAME_MAX_LENGTH: 80`. `useAppStore` does NOT hold these — it holds only ephemeral session state (`currentBookId: string | null`, with a `setCurrentBookId(id)` action; `theme` deferred).
+**Alternatives considered:** (a) park defaults on `useAppStore` as `defaultBookSettings` so the eventual Settings UI mutates one store slice; (b) inline literals in the NewBook form.
+**Why a pure constants module:** (a) §3 rule 4 says stores hold ephemeral state, not domain constants; (b) `src/lib/**` is the canonical home for pure values and §2 already lists it; (c) when Settings (§5.10) lands and defaults become user-overridable, the override will be stored in IndexedDB (a `settings` table or a `books`-level fallback), not in a Zustand store — the constants in `defaults.ts` become the *fallback* the persisted overrides shadow. No store refactor is forced by that future change. (d) Inlining in NewBook duplicates the values once §5.10 ships.
+**Layering note:** `defaults.ts` may `import type` from `src/db/db.ts` (matches the §2 rule that `src/lib/**` imports types from `db/db.ts`). No runtime imports.
 
 ## 6. Cross-cutting rules
 

@@ -62,6 +62,13 @@ The tier label and the colour border are both required — colour alone is not a
 
 ### 5.1 Books
 - Create a Book with `name`, `sourceLang` (BCP-47), `targetLang` (BCP-47), and overridable settings.
+- **New-Book form:**
+  - `name`, `sourceLang`, `targetLang` are all required. Submit is blocked while any is empty (post-trim); inline error text appears next to each empty required field on submit attempt or blur, and clears as soon as the field becomes non-empty.
+  - `name` is trimmed and limited to 1–80 characters. Names are **not** unique — two Books may share a name.
+  - `sourceLang` / `targetLang` are stored as BCP-47 strings but the form does **not** validate the format in v1; any non-empty trimmed string is accepted. Format validation may be revisited when Settings ships.
+  - The user-visible fields do **not** pre-fill: name, source, and target start empty. Pre-filling languages risks silently mis-persisting the wrong locale.
+  - The persisted `BookSettings` block is **not** shown in this form. It is written with the app defaults: `distillationIntervalDays = 14`, `headlistSize = 25`, `autoDropOnHard = false`, `autoDropOnModerate = true`, `autoDropOnEasy = true` (matching §3 step 6). When the Settings UI lands (§5.10), these defaults become user-overridable; the New-Book form's shape does not change.
+  - Successful submit creates the Book and navigates to `/book/:bookId` (the per-Book overview route).
 - Edit Book name, languages, and settings.
 - Delete a Book (with confirmation). Deletes all Lists, Cards, and ReviewEvents.
 
