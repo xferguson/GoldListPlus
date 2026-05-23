@@ -358,7 +358,9 @@ describe('TASK-007 AC-6: previous /about placeholder is removed', () => {
     );
     // kills: leaving a dedicated /about route in the table that renders an
     // "About" placeholder. With /about removed, the wildcard must catch it.
+    // The exact-match anchor guards against the "About" placeholder heading
+    // without false-failing on incidental NotFound copy that contains "about".
     expect(screen.getByTestId('route-not-found')).toBeInTheDocument();
-    expect(screen.queryByText(/about/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/^about$/i)).not.toBeInTheDocument();
   });
 });
