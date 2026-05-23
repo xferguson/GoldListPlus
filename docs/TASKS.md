@@ -236,17 +236,161 @@
 
 ### TASK-011: Create a Bronze List + add Cards
 - [ ] Status
-- **Files touched:** `src/routes/Book/index.tsx`, `src/routes/ListDetail/index.tsx`.
-- **Depends on:** TASK-008, TASK-010.
+- **Files touched:**
+  - Production: `src/routes/Book/index.tsx` (per-Book overview — replaces 6-line stub), `src/routes/ListDetail/index.tsx` (replaces 6-line stub), `src/lib/bronzeTitle.ts` (new pure helper — see ADR-013), `src/db/repos/pages.ts` (add `update` — see ADR-015).
+  - Tests: `src/routes/Book/Book.test.tsx`, `src/routes/ListDetail/ListDetail.test.tsx`, `src/lib/bronzeTitle.test.ts`, `src/db/repos/pages.test.ts` (extend with `pages.update` happy-path block).
+  - Components: **no new** components extracted. AddCardForm and CardRow live inline in `ListDetail/index.tsx` to keep the test surface single-file; if the route exceeds the §6 soft cap of 250 lines, the Implementer must split AddCardForm into `src/routes/ListDetail/AddCardForm.tsx` (route-local, not reusable elsewhere in v1) before submitting. The hard cap is 350 lines.
+- **Depends on:** TASK-008 (`TierBadge`, `TierBorder` primitives), TASK-010 (`useAppStore.currentBookId`, `DEFAULT_BOOK_SETTINGS`, the UI-imports-repos pattern).
+- **Architectural notes (tech-lead decisions):**
+  - **Routing:** the `New Bronze List` affordance on `/book/:bookId` creates the Page **immediately** with no intermediate form (PRD §5.2.1) and then `navigate(`/list/${pageId}`)`. The affordance is a `<button>` (not a `<Link>`) because clicking it has a side effect (creating a row) before navigating. The book overview route reads `bookId` from `useParams<{ bookId: string }>()`; `useAppStore.currentBookId` is NOT the source of truth here (it is a hint from TASK-010 only).
+  - **Auto-title computation (ADR-013):** `nextBronzeTitle(existingTitles)` in `src/lib/bronzeTitle.ts` is pure. The route calls `pages.listByBook(bookId)`, filters to `tier === 'bronze'`, maps to `.title`, and passes that to `nextBronzeTitle`. Gap-reuse is the spec, NOT a counter. See ADR-013 for the algorithm contract and why a counter on `BookSettings` is forbidden.
+  - **Page row at creation:** `pages.create({ id: newId(), bookId, title: nextBronzeTitle(...), tier: 'bronze', createdAt: now, reviewableAt: now + book.settings.distillationIntervalDays * 86_400_000, cardIds: [] })`. `reviewedAt` is left `undefined`. `now = Date.now()` at the call site (§3 rule 6). The intervalDays multiplier is the literal `86_400_000` (matches `src/lib/distillation.ts` `DAY_MS`); the test asserts exact arithmetic against an injected `distillationIntervalDays = 7` fixture to discriminate it from a hardcoded 14.
+  - **Card add flow:** ListDetail's add-Card handler runs `cards.create(card)` then `pages.update(pageId, { cardIds: [...page.cardIds, card.id] })` (ADR-015). The new Card row is appended to the visible list, the form clears, and focus returns to the Source input (PRD §5.2.2). After both repo calls resolve, the route re-reads `pages.get(pageId)` and `cards.listByPage(pageId)` to refresh the displayed state (or maintains an optimistic local list — Implementer's choice, but the AC asserts the Dexie state after each add).
+  - **Card delete flow:** `cards.remove(cardId)` then `pages.update(pageId, { cardIds: page.cardIds.filter(id => id !== cardId) })`. No confirm modal (PRD §5.2.2).
+  - **Card edit flow:** in-place row replacement with Source/Target inputs and Save/Cancel. Save calls `cards.update(cardId, { source, target })`. No change to `Page.cardIds` is needed (the array stores ids, not contents).
+  - **Locked-List branch:** the ListDetail route reads `page.reviewedAt`. If defined, the add-Card form is hidden and per-row Edit/Delete affordances are absent. The locked branch is exercised by a separate fixture in the test suite; the unreviewed branch is the default.
+  - **Headlist-size warning (ADR-014):** `useState<boolean>(false)` for `dismissed`. The warning element renders when `page.cardIds.length >= 26 && !dismissed`. The dismiss button is a `<button data-testid="warning-dismiss" aria-label="Dismiss warning">×</button>`. The warning does not re-arm within the same mount once dismissed (further adds at 27, 28 do not bring it back). Remounting the route (route change away and back) re-arms it. No `localStorage`, no `sessionStorage`, no Zustand. Asserted by both a source-scan test on `ListDetail/index.tsx` and a behavioural remount test.
+  - **Repo access pattern:** the route imports `* as pages from '../../db/repos/pages'` and `* as cards from '../../db/repos/cards'` directly, mirroring the TASK-010 NewBook pattern. No store wrapper.
+  - **Field labels and DOM contracts** (locked so QA can write mutation-survivable tests; Implementer must match exactly):
+    - **Per-Book overview (`/book/:bookId`):**
+      - Root: existing `<main data-testid="route-book">`. An `<h1>` displays the Book's `name` (read via `books.get(bookId)`).
+      - New-Bronze-List affordance: `<button type="button" data-testid="new-bronze-list">New Bronze List</button>` — selector `screen.getByRole('button', { name: /new bronze list/i })`.
+      - Existing-Lists container: `<ul data-testid="pages-list">` containing one `<li data-testid="page-row-${pageId}">` per Page in the Book. Each row contains a `<a data-testid="page-link-${pageId}" href="#/list/${pageId}">` with the Page title as its accessible name, the `TierBadge` and `TierBorder` primitives (Book overview uses these for visual treatment, per PRD §5.2.4), and a `<time data-testid="page-created-${pageId}" dateTime={ISO string of createdAt}>` rendering the created date.
+      - Empty-state: when `pages.listByBook(bookId)` returns `[]`, render `<p data-testid="pages-empty">No lists yet. Create your first Bronze List to start.</p>` — exact copy, PRD §5.2.4. Asserted via `screen.getByText(/^No lists yet\. Create your first Bronze List to start\.$/)`.
+      - List ordering: newest-first by `createdAt` (descending). The test fixture has at least three Pages with deliberately non-monotonic `createdAt` values; the AC asserts the DOM order matches the sort.
+      - Book name displayed via `<h1>` — if `books.get(bookId)` returns `undefined`, render `<p data-testid="book-not-found">Book not found</p>` (defensive; not a primary AC but defined so the implementer does not crash on a stale route param).
+    - **ListDetail (`/list/:pageId`):**
+      - Root: existing `<main data-testid="route-list-detail">`.
+      - Tier wrapper: page content wrapped in `<TierBorder tier={page.tier}>`; the header contains `<TierBadge tier={page.tier} />` and the Page title as `<h1>`.
+      - Card list: `<ul data-testid="cards-list">` containing one `<li data-testid="card-row-${cardId}">` per Card. Each card row contains the source and target text (Implementer's markup, but both strings must be visible and `screen.getByText(source)` resolves).
+      - Edit affordance (unreviewed only): `<button data-testid="card-edit-${cardId}" aria-label="Edit card">Edit</button>` inside `card-row-${cardId}`.
+      - Delete affordance (unreviewed only): `<button data-testid="card-delete-${cardId}" aria-label="Delete card">Delete</button>` inside `card-row-${cardId}`.
+      - Edit-mode row: when Edit is clicked, the row renders inputs `getByLabelText(/^source$/i)` and `getByLabelText(/^target$/i)` (scoped to that row via `within(...)`) plus `getByRole('button', { name: /^save$/i })` and `getByRole('button', { name: /^cancel$/i })`. Cancel discards changes; Save calls `cards.update`.
+      - Add-Card form (unreviewed only): `<form aria-label="Add card" data-testid="add-card-form">` with `<label htmlFor="add-card-source">Source</label> <input id="add-card-source">` and `<label htmlFor="add-card-target">Target</label> <input id="add-card-target">`, and `<button type="submit">Add</button>`. Selectors: `getByLabelText(/^source$/i)` for the source input, `getByLabelText(/^target$/i)` for the target input, `getByRole('button', { name: /^add$/i })` for submit.
+      - Inline add-form errors: `<p data-testid="error-add-source" role="alert">Source is required</p>` and `<p data-testid="error-add-target" role="alert">Target is required</p>`, mirroring the NewBook validation idiom.
+      - Locked branch: when `page.reviewedAt !== undefined`, the route renders no `add-card-form`, no `card-edit-*` buttons, no `card-delete-*` buttons. A `<p data-testid="list-locked">This list has been reviewed and is read-only.</p>` is rendered above the card list. (Defensive copy; an implementer who omits it fails the AC.)
+      - Headlist-size warning: `<div data-testid="headlist-warning" role="status">` containing the exact text **"You have 26 cards on this list. The Gold List Method recommends keeping a headlist around 25 entries — longer lists make distillation harder to remember."** plus `<button data-testid="warning-dismiss" aria-label="Dismiss warning">×</button>`. The element is positioned **immediately above** the add-card form (asserted by sibling-order check or by `compareDocumentPosition`).
+  - **Soft cap targets:**
+    - `src/routes/Book/index.tsx` — target ~120 lines, hard cap 350 (route bucket).
+    - `src/routes/ListDetail/index.tsx` — target ~250 lines, hard cap 350. If it crosses 250, extract AddCardForm into a sibling file. Do NOT extract CardRow unless the file is still over 250 after AddCardForm is extracted — a row with edit/delete inline is small and pays its way as inline JSX.
+    - `src/lib/bronzeTitle.ts` — target ~15 lines, hard cap 200.
+    - `src/db/repos/pages.ts` — currently 44 lines, adding `update` brings it to ~48; hard cap 200.
+    - Tests: each test file target 400 lines, hard cap 600.
 - **Acceptance criteria:**
-  1. From a Book overview, the user can create a new Bronze List with an auto-generated title (`Bronze 1`, `Bronze 2`, …).
-  2. ListDetail allows adding Cards (source + target) until the user marks the List "Ready" (sets a flag — actually we just set `reviewableAt = createdAt + intervalDays` at creation and lock further edits when `reviewedAt` is set).
-  3. ListDetail displays the tier border and label per PRD §4, by composing the `TierBadge` and `TierBorder` primitives from TASK-008 (which already consume `tierVisual` from `src/lib/tiers.ts`). This task does not edit `src/lib/tiers.ts` or the components themselves.
-  4. Soft warning shown when adding the 26th Card; not blocked.
+  1. **`nextBronzeTitle` pure helper.**
+     - Exports a named function `nextBronzeTitle(existingTitles: string[]): string` from `src/lib/bronzeTitle.ts`.
+     - `nextBronzeTitle([])` returns `'Bronze 1'`.
+     - `nextBronzeTitle(['Bronze 1'])` returns `'Bronze 2'`.
+     - `nextBronzeTitle(['Bronze 1', 'Bronze 2'])` returns `'Bronze 3'`.
+     - **Gap reuse:** `nextBronzeTitle(['Bronze 1', 'Bronze 3'])` returns `'Bronze 2'` — discriminates "smallest unused" from "highest + 1".
+     - **Gap reuse with multiple gaps:** `nextBronzeTitle(['Bronze 2', 'Bronze 4', 'Bronze 5'])` returns `'Bronze 1'` — discriminates from "highest + 1" and from "length + 1".
+     - **Non-matching titles ignored:** `nextBronzeTitle(['Silver 1', 'Gold 1', 'Bronze 1'])` returns `'Bronze 2'` — the non-Bronze titles do not contribute.
+     - **Malformed-titles ignored:** `nextBronzeTitle(['Bronze', 'Bronze  2', 'bronze 1', 'Bronze 01'])` returns `'Bronze 1'` — bare "Bronze" (no number), double-space, lowercase, leading-zero variants are all ignored.
+     - Source-level scan on `src/lib/bronzeTitle.ts`: no `import` from `react`, `react-dom`, `react-router-dom`, `zustand`, `dexie`, `../db/db`, or any path under `../db/repos/`. No `Date.now(`. No `window.`.
+  2. **`pages.update` repo function.**
+     - `src/db/repos/pages.ts` exports `update(id: string, changes: Partial<Page>): Promise<void>`.
+     - Called with `update(pageId, { cardIds: ['c1','c2'] })` against a stored Page, the persisted row's `cardIds` deep-equals `['c1','c2']` after the call resolves.
+     - Called with `update(pageId, { reviewedAt: 12345 })` against a stored Page, the persisted row's `reviewedAt === 12345`.
+     - Unlike `cards.update`, `pages.update` does NOT throw when the target Page's `reviewedAt` is already set — the lock is a UI-layer concern. Asserted by calling `pages.update(reviewedPageId, { lastNotifiedAt: 999 })` and confirming it resolves and persists.
+  3. **Per-Book overview — New-Bronze-List affordance.**
+     - `/book/:bookId` renders `getByRole('button', { name: /new bronze list/i })` with `data-testid="new-bronze-list"`. It is always present, regardless of the Page count.
+     - Clicking the button calls `pages.create` exactly once with an object whose:
+       - `id` is a 26-char ULID (`/^[0-9A-HJKMNP-TV-Z]{26}$/`),
+       - `bookId` equals the route's `bookId`,
+       - `title === 'Bronze 1'` when the Book has no existing Bronze Pages,
+       - `tier === 'bronze'`,
+       - `createdAt` is a `number > 0`,
+       - `reviewableAt === createdAt + book.settings.distillationIntervalDays * 86_400_000` — **asserted with a fixture Book whose `distillationIntervalDays` is 7** (not the default 14), so a regression hardcoding `14` fails. Computed equality: e.g. `createdAt + 7 * 86_400_000 === reviewableAt`.
+       - `reviewedAt === undefined`,
+       - `cardIds` deep-equals `[]`.
+     - After `pages.create` resolves, the test asserts navigation to `/list/<that-same-id>` (via `MemoryRouter` history or a sibling probe component).
+     - No intermediate form is shown — there is no `route-new-bronze-list` or similar; the click leads straight to `/list/:pageId`.
+  4. **Per-Book overview — gap-reuse on second create.**
+     - Fixture: a Book containing Pages with titles `'Bronze 1'` and `'Bronze 3'` (i.e. `Bronze 2` was deleted). Clicking New Bronze List calls `pages.create` with `title === 'Bronze 2'`. This AC fails for any implementation that uses `length + 1`, `max + 1`, or a counter on `Book.settings`.
+     - Fixture: a Book containing only `'Silver 1'`. Clicking New Bronze List calls `pages.create` with `title === 'Bronze 1'` — non-Bronze titles do not influence the count.
+  5. **Per-Book overview — existing-Lists rendering.**
+     - A Book containing three Pages with `createdAt` values `[1000, 3000, 2000]` (i.e. middle Page was created last) renders the `page-row-*` items in the order `[3000-id, 2000-id, 1000-id]` (newest-first). Asserted by reading the DOM order of `data-testid^="page-row-"` elements.
+     - Each row contains a link with `href` ending in `#/list/${pageId}` (HashRouter form).
+     - Each row visually applies the tier's border/label via the `TierBorder` and `TierBadge` primitives (asserted by querying for an element whose `className` includes the `borderClass` from `tierVisual(tier)` — substring match, not exact — and an element with `role="status"` whose `aria-label` is the tier's `label`).
+  6. **Per-Book overview — empty state.**
+     - A Book with zero Pages renders `getByTestId('pages-empty')` whose text content matches **exactly** `'No lists yet. Create your first Bronze List to start.'` (full-string regex match). Mutation-killing: a regression that drops the trailing period or swaps "Create" for "Make" fails.
+     - The empty-state copy is NOT rendered when at least one Page exists.
+     - The New-Bronze-List affordance is rendered both with and without existing Pages (independent of the empty state).
+  7. **ListDetail — page header (unreviewed).**
+     - `/list/:pageId` for an unreviewed Bronze Page renders the Page's `title` inside an `<h1>` and a `TierBadge` whose `aria-label === 'Bronze'`.
+     - The route content is wrapped in an element whose `className` contains the bronze `borderClass` substring (so the border colour is bronze-family).
+  8. **ListDetail — Add-Card form is present on unreviewed Page.**
+     - `getByTestId('add-card-form')` is in the DOM.
+     - The form has two inputs accessible as `getByLabelText(/^source$/i)` and `getByLabelText(/^target$/i)`, both initially with `value === ''`.
+     - `getByRole('button', { name: /^add$/i })` is present.
+  9. **ListDetail — Add-Card validation.**
+     - With both inputs empty, clicking Add does NOT call `cards.create` and does NOT call `pages.update`. Both error elements (`error-add-source`, `error-add-target`) appear.
+     - With only Source filled (Target empty, post-trim), clicking Add still does not submit; `error-add-target` is present, `error-add-source` is absent.
+     - Whitespace-only inputs (e.g. `'   '`) are treated as empty.
+     - Typing into a field that has an error clears that field's error element on the next change without affecting the other.
+  10. **ListDetail — Add-Card success.**
+     - Filling both inputs (e.g. Source `'  hello  '`, Target `'  hola  '`) and clicking Add calls `cards.create` exactly once with an object whose:
+       - `id` is a 26-char ULID,
+       - `bookId` matches the Page's `bookId`,
+       - `pageId` matches the route's `pageId`,
+       - `source === 'hello'` and `target === 'hola'` (trimmed),
+       - `createdAt` is `number > 0`,
+       - `archivedAt === undefined`,
+       - `parentIds === undefined` (Bronze cards have no parents).
+     - Calls `pages.update(pageId, { cardIds: [...prevCardIds, newCard.id] })` exactly once, with the new id appended to the existing array. Asserted by reading `db.pages.get(pageId)` after the await.
+     - After the resolve: both inputs clear (`value === ''`), neither error is in the DOM, and `document.activeElement` is the Source input (focus returns).
+     - The new card appears in `getByTestId('cards-list')` with `getByTestId(`card-row-${newId}`)` rendering both strings.
+  11. **ListDetail — Card row Edit affordance.**
+     - For an unreviewed Page with two existing Cards, each `card-row-${cardId}` contains a `card-edit-${cardId}` button.
+     - Clicking Edit on a row replaces the row's source/target text with two inputs prepopulated with the card's current values. Save and Cancel buttons are visible within the row.
+     - Save calls `cards.update(cardId, { source: <trimmed>, target: <trimmed> })` exactly once and exits edit-mode showing the new values. Cancel exits edit-mode showing the original values without calling `cards.update`.
+  12. **ListDetail — Card row Delete affordance.**
+     - For an unreviewed Page with two existing Cards, each `card-row-${cardId}` contains a `card-delete-${cardId}` button.
+     - Clicking Delete calls `cards.remove(cardId)` exactly once and then `pages.update(pageId, { cardIds: <prev minus deleted> })` exactly once.
+     - The row is no longer in the DOM after the awaited deletes.
+     - There is no confirm modal — `getByRole('dialog')` is not in the DOM at any point during the delete flow.
+  13. **ListDetail — Edit/Delete HIDDEN on reviewed Page.**
+     - Fixture: a Page with `reviewedAt = <some number>` and at least two cards.
+     - `queryByTestId('add-card-form')` is `null`.
+     - For every existing card, `queryByTestId(`card-edit-${cardId}`)` and `queryByTestId(`card-delete-${cardId}`)` are both `null`.
+     - `getByTestId('list-locked')` is in the DOM with text matching `/this list has been reviewed and is read-only/i`.
+     - The cards themselves are still rendered (source and target text visible).
+     - This AC is paired with AC-11 / AC-12 — the same selectors must be present in the unreviewed fixture and absent in the reviewed fixture.
+  14. **ListDetail — Headlist-size warning appears at exactly 26 cards.**
+     - Fixture: an unreviewed Page with 25 existing Cards. `queryByTestId('headlist-warning')` is `null`.
+     - Add the 26th Card (via the form). `getByTestId('headlist-warning')` is in the DOM and contains the exact text **"You have 26 cards on this list. The Gold List Method recommends keeping a headlist around 25 entries — longer lists make distillation harder to remember."** (full-string substring match against `textContent`).
+     - The warning is positioned **before** (sibling-order) the `add-card-form` in the DOM. Asserted via `compareDocumentPosition` returning `DOCUMENT_POSITION_FOLLOWING` from warning to form, or via index comparison among the parent's children.
+     - The Card is added normally (i.e. AC-10 still applies — the warning does not gate the submit).
+  15. **ListDetail — Headlist warning dismissal.**
+     - With the warning visible (26 cards), clicking `getByTestId('warning-dismiss')` removes the warning from the DOM (`queryByTestId('headlist-warning')` is `null`).
+     - Adding a 27th Card after dismissal does NOT re-render the warning (`queryByTestId('headlist-warning')` remains `null`).
+     - Adding a 28th, 29th, ... Card does not re-render the warning either.
+  16. **ListDetail — Headlist warning re-arms on remount.**
+     - With 26 cards and the warning dismissed, unmount the route (navigate to `/` then back to `/list/:pageId`), then re-render. `getByTestId('headlist-warning')` is in the DOM again.
+     - Dismissal state is NOT persisted to `localStorage` / `sessionStorage` — asserted by a source-level scan on `src/routes/ListDetail/index.tsx` that the file does not contain the substrings `localStorage` or `sessionStorage`. (ADR-014.)
+  17. **ListDetail — Headlist warning re-fires after delete + re-add.**
+     - Fixture: 25 cards, no warning visible.
+     - Add a 26th — warning appears. Dismiss it.
+     - Delete one card — count goes to 25, warning is not visible (and was not visible at that count anyway).
+     - Add another — count goes to 26 again. Within the **same mount** (no reload), warning does NOT re-appear (dismissal persists per ADR-014).
+     - A separate sub-test: remount the route between the dismiss and the second 26-add, and the warning DOES re-appear at 26. This pair of assertions discriminates "session-scoped dismissal" from "page-id-scoped dismissal" and from "always re-fires".
+  18. **`bronzeTitle.ts` purity scan.**
+     - Source-level assertion in `src/lib/bronzeTitle.test.ts` that the file (read via `import.meta.glob('?raw')`) contains no runtime imports from `react`, `react-dom`, `react-router-dom`, `zustand`, `dexie`, `../db/db`, or `../db/repos/`; no `Date.now(`; no `window.`. Type-only imports are permitted (none expected — the function operates on `string[]` and returns `string`).
+- **Out of scope:**
+  - **Tier-grouped overview layout** (Bronze / Silver / Gold sections), due-date column, and status pill — deferred to **TASK-016**. TASK-011 ships the flat newest-first list per PRD §5.2.4.
+  - **Review flow** (Start Review, due indicators, "Review on demand" button for Gold) — TASK-012 owns this. TASK-011 does not render a Start-Review affordance.
+  - **Distillation Review screen / Builder** — TASK-013 / TASK-014.
+  - **Per-Book `book.settings.headlistSize` override UI** — the threshold reads from `book.settings.headlistSize` (already on the Book row from TASK-010) so the test fixture can vary it, but no UI to edit settings ships here. Settings UI is **TASK-018+**.
+  - **Card reordering** — PRD §5.2 mentions reorder; v1 ships add / edit / delete only. The `Page.cardIds` array's order is the source of truth, but no drag-handle UI ships. Reorder is deferred to a later polish task (not yet numbered).
+  - **Delete an entire List** — PRD §5.2 mentions it; defer (a separate `route-list-detail` affordance is not part of TASK-011's AC). When it lands it will call `pages.remove` (which does not exist yet — also a future task).
+  - **Page-row delete affordance on the per-Book overview** — not in PRD §5.2.4's v1 minimum. Defer to TASK-016 or a dedicated delete task.
+  - **Edit Book name / languages** — separate task.
+  - **Modal usage** — `Modal` primitive ships in TASK-008 but the Bronze-creation flow is router-driven with no modal (the New-Bronze-List button is a direct mutation + navigate). The delete affordance is inline-no-confirm per PRD §5.2.2. TASK-014 is the first user of `Modal`.
 
 ### TASK-012: Flashcard Review flow
 - [ ] Status
-- **Files touched:** `src/routes/Review/index.tsx`, `src/components/Flashcard.tsx`, `src/components/RatingButtons.tsx`, `src/stores/useReviewSessionStore.ts`.
+- **Forward note (from TASK-011 tech-lead pass):** ListDetail's "Start Review" affordance is **not** part of TASK-011. TASK-011 ships an unreviewed-Page editor only. TASK-012 will add the affordance to `src/routes/ListDetail/index.tsx`; the file is targeted at ~250 lines after TASK-011, so the Start-Review button + due-date display + locked-branch logic should fit under the 350-line hard cap. If TASK-012 pushes the file over 250, extract Start-Review into a sibling component (`src/routes/ListDetail/StartReview.tsx`) before submitting. The DOM contract for the Start-Review affordance is NOT locked here; TASK-012's tech-lead pass will lock it. Note also that the locked-branch copy in TASK-011 (`data-testid="list-locked"`) refers to the post-review read-only state; do not conflict the Start-Review affordance with it (a not-yet-due Page is unreviewed AND not started; a reviewed Page is locked; a Gold Page shows "Review on demand"). All three branches will coexist after TASK-012.
+- **Files touched:** `src/routes/Review/index.tsx`, `src/components/Flashcard.tsx`, `src/components/RatingButtons.tsx`, `src/stores/useReviewSessionStore.ts`, `src/routes/ListDetail/index.tsx` (add Start-Review affordance).
 - **Depends on:** TASK-009, TASK-011.
 - **Acceptance criteria:**
   1. ListDetail for a due List shows "Start Review"; for a not-yet-due List, shows the due date and disables Start Review (Gold has "Review on demand" instead).
@@ -258,6 +402,7 @@
 
 ### TASK-013: Distillation Review screen
 - [ ] Status
+- **Forward note (from TASK-011 tech-lead pass):** `flagsForPage` (TASK-004) enumerates `page.cardIds`, which TASK-011 keeps in sync via `pages.update` (ADR-015) on every add / remove during the unreviewed phase. By the time TASK-013 runs, `page.cardIds` is the authoritative ordered list for the Distillation Review screen — read `pages.get(pageId)` and iterate `page.cardIds`, then fetch each Card via `cards.get(cardId)` (or `cards.listByPage(pageId)` and re-order client-side using `page.cardIds`). Do not rely on `cards.listByPage` order alone — the Dexie index returns insertion order, which matches `cardIds` only because TASK-011's add path appends to both in the same order. If a future repo function reorders cards, `page.cardIds` is canon.
 - **Files touched:** `src/routes/Distill/ReviewSummary/index.tsx`.
 - **Depends on:** TASK-012, TASK-004 (flagsForPage), TASK-005 (reviews.latestPerCardForPage).
 - **Acceptance criteria:**
@@ -268,6 +413,7 @@
 
 ### TASK-014: Distillation Builder
 - [ ] Status
+- **Forward note (from TASK-011 tech-lead pass):** Child-Page titles produced by the Builder are NOT computed via `nextBronzeTitle` — that helper is Bronze-specific by design (`^Bronze (\d+)$`). When TASK-014 lands, add a sibling pure helper `nextTitleForTier(tier, existingTitles)` in `src/lib/bronzeTitle.ts` (or rename the module to `src/lib/listTitle.ts` at that point) that generalises the gap-reuse algorithm to `silver` / `gold`. The current `finalizePage` hardcodes `\`${childTier} from ${parent.title}\`` (see TASK-004 second-pass note); TASK-014's tech-lead pass should decide whether to promote `title` to a `finalizePage` argument or to compute it inside the Builder before calling `pages.finalize`. The latter is the natural fit because the Builder owns the user-facing title.
 - **Files touched:** `src/routes/Distill/Builder/index.tsx`, `src/routes/Distill/Builder/AddEntryModal.tsx`, `src/components/Modal.tsx`.
 - **Depends on:** TASK-008, TASK-013.
 - **Acceptance criteria:**
