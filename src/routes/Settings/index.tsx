@@ -131,6 +131,13 @@ export function Settings() {
 
     const parseResult = parseExport(parsedJson);
     if (!parseResult.ok) {
+      if (parseResult.error.kind === 'malformed-row') {
+        console.warn('settings.import: malformed row', {
+          table: parseResult.error.table,
+          index: parseResult.error.index,
+          reason: parseResult.error.reason,
+        });
+      }
       setErrorText(errorCopy(parseResult.error));
       return;
     }

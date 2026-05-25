@@ -123,7 +123,9 @@ function validatePageRow(input: unknown): RowValidation<Page> {
   if (input.reviewableAt !== null && !Number.isFinite(input.reviewableAt)) {
     return { ok: false, reason: "'reviewableAt' is not null or a finite number" };
   }
-  if (!Array.isArray(input.cardIds)) return { ok: false, reason: "'cardIds' is not an array" };
+  if (!Array.isArray(input.cardIds) || !input.cardIds.every((x) => isNonEmptyString(x))) {
+    return { ok: false, reason: 'cardIds is not an array of non-empty strings' };
+  }
   if (input.reviewedAt !== undefined && !Number.isFinite(input.reviewedAt)) {
     return { ok: false, reason: "'reviewedAt' is present but not a finite number" };
   }
@@ -164,8 +166,11 @@ function validateCardRow(input: unknown): RowValidation<Card> {
   if (typeof input.source !== 'string') return { ok: false, reason: "missing or non-string 'source'" };
   if (typeof input.target !== 'string') return { ok: false, reason: "missing or non-string 'target'" };
   if (!Number.isFinite(input.createdAt)) return { ok: false, reason: "'createdAt' is not a finite number" };
-  if (input.parentIds !== undefined && !Array.isArray(input.parentIds)) {
-    return { ok: false, reason: "'parentIds' is present but not an array" };
+  if (
+    input.parentIds !== undefined &&
+    (!Array.isArray(input.parentIds) || !input.parentIds.every((x) => isNonEmptyString(x)))
+  ) {
+    return { ok: false, reason: 'parentIds is present but is not an array of non-empty strings' };
   }
   if (input.archivedAt !== undefined && !Number.isFinite(input.archivedAt)) {
     return { ok: false, reason: "'archivedAt' is present but not a finite number" };
