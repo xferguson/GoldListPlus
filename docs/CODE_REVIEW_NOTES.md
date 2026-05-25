@@ -68,9 +68,53 @@ Lessons that apply across all future PRs, surfaced from individual review entrie
 **Reviewer surface:** reviewer-complexity (line-count threshold component), tech-lead second-pass audit.
 **Rule:** Hard caps per bucket in ARCHITECTURE.md §6. Violation = kickback to implementer for a split. Bypass requires a `// rationale-for-size:` comment AND a TASKS.md exception note. The reviewer-complexity agent also catches these as part of its checks.
 
+### P-005 — Route tests must use real repos + `fake-indexeddb`, never `vi.mock('../../db/repos/*')`
+
+**Established:** CHORE-003 (2026-05-25).
+**Reviewer surface:** reviewer-testability, reviewer-generic.
+**Rule:** `vi.mock('../../db/repos/{books,pages,cards,reviews}')` in any `src/routes/**/*.test.tsx` is a `BLOCKER`. Mocking the entire repo layer lets tests pass against a `return undefined`-stubbed production; collaboration-shape assertions (`expect(mock).toHaveBeenCalledWith(...)`) do not observe outcomes. The fix is the close/delete/open dance from `src/db/repos/pages.test.ts:35-47` plus outcome reads against the real repo wrappers. Rejection-path tests inject via `vi.spyOn(db.X, 'add').mockRejectedValueOnce(...)` at the Dexie layer (not at the repo) so the SUT's real `repo.create` codepath runs.
+**Anti-pattern to flag on sight:** any `vi.mock('../../db/repos/...')` in `src/routes/**/*.test.tsx`.
+**Reference implementation:** `src/db/repos/pages.test.ts:35-47`; `src/routes/Book/NewBook.test.tsx` rejection-path tactic.
+
+### P-006 — AC wording-bug resolution: honour same-bullet rationale over literal floor, when an honesty check corroborates
+
+**Established:** CHORE-003 (2026-05-25).
+**Reviewer surface:** reviewer-generic, tech-lead second-pass.
+**Rule:** If an AC bullet contains both a literal threshold AND a parenthetical justification that contradicts it, AND a separate honesty check (mutation trap, behavioural assertion, independent test) corroborates the rationale's intent, the spirit wins. The CHORE-003 example: AC-4 mandated a `-10` deletion AND the chore forbade adding new tests AND AC-5's `≥ 515` floor justified itself with "no coverage regression — the empty-table tests being deleted were shadowed by the filter block." Three reviewers (generic + tech-lead second-pass + the orchestrator-run mutation trap) independently confirmed coverage survived. The literal floor was the wording bug, not a real requirement. Future reviewers facing this pattern: surface it explicitly in the consolidated verdict, do NOT paper over it. The rationale-clause-plus-honesty-check criterion prevents this from becoming a "spirit beats letter whenever convenient" loophole.
+
+### P-007 — `waitForElementToBeRemoved` is a latent race against any async write that awaits a repo
+
+**Established:** CHORE-003 (2026-05-25).
+**Reviewer surface:** reviewer-testability, reviewer-generic.
+**Rule:** `waitForElementToBeRemoved(() => queryByTestId(X))` requires `X` to be present at the moment the matcher's first check fires. With real Dexie (or any awaited async write), the removal microtask can resolve first, and the matcher throws `"element(s) ... are already removed"` — a 1-in-3 flake under load. The robust primitive for "click-then-assert-gone with async write" is `await waitFor(() => expect(queryByTestId(X)).not.toBeInTheDocument())`. Acceptable use of `waitForElementToBeRemoved`: elements removed by a synchronous state transition (e.g. a Save button rendered only in edit-mode, removed when edit-mode exits) where presence-at-call-time is guaranteed.
+**Anti-pattern to flag on sight:** `waitForElementToBeRemoved` targeting an element removed by a route-layer write that awaits a repo function. The give-away: the same test's preceding statement is `await user.click(...)` followed immediately by `await waitForElementToBeRemoved(...)`.
+
 ## Reviews
 
 > Newest first. Append, never edit historical entries — corrections go in a new entry referencing the old.
+
+### 2026-05-25 — PR #TBD — `worktree-GoldListPlus-CHORE-003` — CHORE-003 test refactor: `vi.mock` → real-repo + fake-indexeddb
+
+**Scope:** CHORE-003 — replace `vi.mock('../../db/repos/*')` with real-repo + `fake-indexeddb` seeding in three route test files (`Book.test.tsx`, `NewBook.test.tsx`, `ListDetail.test.tsx`); delete the shadowed empty-table describe block in `db.test.ts:62-130`. Pure test refactor; zero production code changes.
+**Verdict:** REQUEST_CHANGES (resolved) → APPROVE
+**Specialists:** 8/10 returned APPROVE on first pass (complexity, responsibility, scope, security, observability, error-handling, testability, modularity). 2/10 returned REQUEST_CHANGES (readability, generic). Both addressed by a follow-up QA pass; re-run was clean.
+
+**Findings:**
+- [BLOCKER] reviewer-generic @ `src/routes/ListDetail/ListDetail.test.tsx:374,549` — `waitForElementToBeRemoved` race-condition flake with real Dexie (1-in-3 false-fail observed in CI-style cold runs). The matcher requires the element to be present at call time, but with real Dexie the delete-write microtask can resolve before the matcher's first check, throwing `"element(s) ... are already removed"`. **Resolved** by replacing both sites with `await waitFor(() => expect(queryByTestId(removedId)).not.toBeInTheDocument())`, which polls the post-condition without requiring presence at call time. 3-run stability verified.
+- [MAJOR] reviewer-readability @ `src/routes/Book/NewBook.test.tsx:314,316` — `describe` block + matrix block comment still describe the mechanism the chore was removing (`"calls books.create with the right shape"`, `"// - books.create called exactly once"`) even though every `it` body underneath was correctly renamed to outcome-style. **Resolved** by renaming the `describe` to `"successful submit persists with defaults and navigates"` and the comment line to `"// - exactly one Book row written"`.
+- [MAJOR] reviewer-readability @ `src/routes/Book/Book.test.tsx:237` — `it('AC-3c: after pages.create resolves, ...')` still names the repo function the test no longer awaits directly. **Resolved** by renaming to `"AC-3c: after the new Bronze List is persisted, navigation lands on ..."`.
+- [MINOR] reviewer-readability @ `src/routes/ListDetail/ListDetail.test.tsx:20-22` and `src/routes/Book/Book.test.tsx:13-15` — file header comments described seeding via repos but the `seed()` helper writes via raw `db.*.add` / `db.*.bulkAdd` (a deliberate choice for fixtures with non-canonical shapes). **Resolved** by tightening both comments to say writes go through real repos and fixtures seed via raw `db.*.add`.
+
+**Precedent / lesson:**
+This chore resolves the candidate-precedent flagged in the 2026-05-25 baseline review entry below: the `vi.mock('../../db/repos/*')` pattern recurring across three route test files. The fix is now codified in three places (each refactored file's `beforeEach`/`afterEach` mirrors `src/db/repos/pages.test.ts:35-47` with a `// Pattern lifted from ...` comment), so a future contributor re-introducing `vi.mock('../../db/repos/*')` will be visible to grep and should be kicked back in PR review. Promoting to **P-005** below.
+
+Two **process precedents** worth recording from this chore:
+
+1. **AC wording-bug resolution by spirit.** CHORE-003's AC-5 said `≥ 515 total tests` literally, but AC-4 mandated a `-10` deletion AND the same chore's out-of-scope list forbade adding new tests — mechanically inconsistent. Both `reviewer-generic` and the Tech Lead second-pass agreed to honour the AC's parenthetical justification ("no coverage regression — the empty-table tests being deleted were shadowed") over the literal floor. The mutation trap independently confirmed coverage survived (3 file-targeted mutations each killed ≥7 tests in the corresponding refactored file). Future reviewers facing literal-vs-spirit tension in an AC bullet should look for a same-bullet rationale clause and weight it heavily — but only when an independent honesty check (mutation trap, behavioural assertion) corroborates the spirit interpretation. Recording as **P-006**.
+
+2. **`waitForElementToBeRemoved` is a latent race against real async writes.** The matcher's "element must be present at call time" semantics work when the trigger and the removal happen on the same microtask (the in-memory mock case), but become a 1-in-3 flake when the removal awaits a real Dexie transaction. The robust primitive for "click-then-assert-gone with async write" is `await waitFor(() => expect(queryByTestId(id)).not.toBeInTheDocument())`. The `reviewer-testability` and `reviewer-generic` reviewers should flag any `waitForElementToBeRemoved` call that targets an element removed by a route-layer write that awaits a repo. Recording as **P-007**.
+
+**Waivers:** none. All BLOCKER + MAJOR findings were resolved in the same PR.
 
 ### 2026-05-25 — PR #TBD — `worktree-GoldListPlus-CHORE-004` — CHORE-004 tightens `parseExport` to per-row schema validation
 
@@ -93,6 +137,7 @@ The chore's targeted MAJORs (per-row schema, prototype-pollution-adjacent) close
 **Waivers:** none. The 3 pre-existing MAJORs are *deferred* (file follow-up chore), not waived.
 
 
+### 2026-05-25 — baseline — `claude/gracious-knuth-665964` — first run of the 10-reviewer orchestrator against existing codebase
 
 **Scope:** Baseline review of the whole codebase at HEAD `be0c896` (no PR diff). First exercise of the 10-specialist orchestrator + consolidator pipeline introduced in PR #14. All ten reviewers fired in parallel against the entire `src/` tree (~53 production files, ~3490 LOC non-test) and `docs/`.
 **Verdict:** REQUEST_CHANGES (consolidated). The full consolidated report lives in the conversation transcript that produced this run; copying it verbatim would exceed the archive's signal/noise budget.

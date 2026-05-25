@@ -1,35 +1,20 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Routes, Route, useLocation, useParams } from 'react-router-dom';
 import { Book } from './index';
 import { tierVisual } from '../../lib/tiers';
 import type { Book as BookType, Page } from '../../db/db';
+import { db } from '../../db/db';
 import * as books from '../../db/repos/books';
 import * as pages from '../../db/repos/pages';
 import { MS_PER_DAY } from '../../lib/time';
 
 // ---------------------------------------------------------------------------
-// Mock the two repos the Book route reads. vi.mock is hoisted, so the path
-// matches what the SUT imports (from src/routes/Book/index.tsx → '../../db/repos/...').
+// Real Dexie + fake-indexeddb. We seed via books.create / pages.create and
+// observe via the real repo queries. The close/delete/open dance mirrors
+// src/db/repos/pages.test.ts:35-47.
 // ---------------------------------------------------------------------------
-
-vi.mock('../../db/repos/books', () => ({
-  create: vi.fn(),
-  get: vi.fn(),
-  update: vi.fn(),
-  list: vi.fn(),
-  remove: vi.fn(),
-}));
-
-vi.mock('../../db/repos/pages', () => ({
-  create: vi.fn(),
-  get: vi.fn(),
-  listByBook: vi.fn(),
-  listDue: vi.fn(),
-  finalize: vi.fn(),
-  update: vi.fn(),
-}));
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -91,15 +76,22 @@ function renderRoute(bookId: string) {
   );
 }
 
-beforeEach(() => {
-  vi.mocked(books.get).mockReset();
-  vi.mocked(pages.create).mockReset();
-  vi.mocked(pages.listByBook).mockReset();
+beforeEach(async () => {
+  if (db.isOpen()) {
+    db.close();
+  }
+  await db.delete();
+  await db.open();
+  // Default seed: a single Book matching 'book-1' so the route renders with a
+  // name. Individual tests seed Pages (or override the Book) before rendering.
+  await books.create(makeBook());
+});
 
-  // Default behaviour: a Book exists, no pages, create resolves.
-  vi.mocked(books.get).mockResolvedValue(makeBook());
-  vi.mocked(pages.listByBook).mockResolvedValue([]);
-  vi.mocked(pages.create).mockResolvedValue(undefined);
+afterEach(async () => {
+  vi.restoreAllMocks();
+  if (db.isOpen()) {
+    db.close();
+  }
 });
 
 // ===========================================================================
@@ -116,9 +108,7 @@ describe('TASK-011 AC-3: per-Book overview — New-Bronze-List affordance', () =
   });
 
   it('AC-3a: button is also present when Book already has Pages (affordance independent of empty state)', async () => {
-    vi.mocked(pages.listByBook).mockResolvedValue([
-      makePage({ id: 'p1', title: 'Bronze 1', createdAt: 1000 }),
-    ]);
+    await pages.create(makePage({ id: 'p1', title: 'Bronze 1', createdAt: 1000 }));
     renderRoute('book-1');
     expect(
       await screen.findByRole('button', { name: /new bronze list/i }),
@@ -134,72 +124,76 @@ describe('TASK-011 AC-3: per-Book overview — New-Bronze-List affordance', () =
     expect((btn as HTMLButtonElement).type).toBe('button');
   });
 
-  it('AC-3b: clicking the button calls pages.create exactly once', async () => {
+  it('AC-3b: clicking the button writes exactly one new Page row', async () => {
     const user = userEvent.setup();
     renderRoute('book-1');
     await user.click(await screen.findByRole('button', { name: /new bronze list/i }));
 
-    expect(pages.create).toHaveBeenCalledTimes(1);
+    // Wait for navigation so the create has resolved before we read back.
+    await screen.findByTestId('route-list-detail-probe');
+    expect(await pages.listByBook('book-1')).toHaveLength(1);
   });
 
-  it('AC-3b: pages.create is called with a 26-char ULID id', async () => {
+  it('AC-3b: the persisted Page has a 26-char ULID id', async () => {
     const user = userEvent.setup();
     renderRoute('book-1');
     await user.click(await screen.findByRole('button', { name: /new bronze list/i }));
 
-    expect(pages.create).toHaveBeenCalledWith(
-      expect.objectContaining({
-        id: expect.stringMatching(/^[0-9A-HJKMNP-TV-Z]{26}$/),
-      }),
-    );
+    await screen.findByTestId('route-list-detail-probe');
+    const persisted = await pages.listByBook('book-1');
+    expect(persisted).toHaveLength(1);
+    expect(persisted[0]!.id).toMatch(/^[0-9A-HJKMNP-TV-Z]{26}$/);
   });
 
-  it('AC-3b: pages.create is called with bookId === route param', async () => {
+  it('AC-3b: the persisted Page has bookId === route param', async () => {
+    // The route reads bookId from useParams (NOT from useAppStore), and the
+    // persisted Page must carry that exact bookId.
+    await books.create(makeBook({ id: 'book-XYZ' }));
     const user = userEvent.setup();
     renderRoute('book-XYZ');
-    vi.mocked(books.get).mockResolvedValue(makeBook({ id: 'book-XYZ' }));
-    // Re-render — the mock change above is for any subsequent calls, but
-    // the initial render already started. Easiest: re-await listByBook.
-    // Since listByBook default returns [], the page renders. The route reads
-    // bookId from useParams (NOT from useAppStore), and pages.create must
-    // receive that exact value.
     await user.click(await screen.findByRole('button', { name: /new bronze list/i }));
 
-    expect(pages.create).toHaveBeenCalledWith(
-      expect.objectContaining({ bookId: 'book-XYZ' }),
-    );
+    await screen.findByTestId('route-list-detail-probe');
+    const persisted = await pages.listByBook('book-XYZ');
+    expect(persisted).toHaveLength(1);
+    expect(persisted[0]!.bookId).toBe('book-XYZ');
+    // false-positive guard: nothing leaked into book-1.
+    expect(await pages.listByBook('book-1')).toHaveLength(0);
   });
 
-  it('AC-3b: pages.create is called with tier === "bronze" and cardIds === []', async () => {
+  it('AC-3b: the persisted Page has tier === "bronze" and cardIds === []', async () => {
     const user = userEvent.setup();
     renderRoute('book-1');
     await user.click(await screen.findByRole('button', { name: /new bronze list/i }));
 
-    const arg = vi.mocked(pages.create).mock.calls[0]?.[0];
-    expect(arg).toBeDefined();
-    expect(arg!.tier).toBe('bronze');
-    expect(arg!.cardIds).toEqual([]);
+    await screen.findByTestId('route-list-detail-probe');
+    const persisted = await pages.listByBook('book-1');
+    expect(persisted).toHaveLength(1);
+    expect(persisted[0]!.tier).toBe('bronze');
+    expect(persisted[0]!.cardIds).toEqual([]);
   });
 
-  it('AC-3b: pages.create is called with title === "Bronze 1" when no existing Bronze pages', async () => {
+  it('AC-3b: the persisted Page has title === "Bronze 1" when no existing Bronze pages', async () => {
     const user = userEvent.setup();
     renderRoute('book-1');
     await user.click(await screen.findByRole('button', { name: /new bronze list/i }));
 
-    expect(pages.create).toHaveBeenCalledWith(
-      expect.objectContaining({ title: 'Bronze 1' }),
-    );
+    await screen.findByTestId('route-list-detail-probe');
+    const persisted = await pages.listByBook('book-1');
+    expect(persisted).toHaveLength(1);
+    expect(persisted[0]!.title).toBe('Bronze 1');
   });
 
-  it('AC-3b: createdAt is a positive number (real time, not 0)', async () => {
+  it('AC-3b: createdAt on the persisted Page is a positive number (real time, not 0)', async () => {
     const user = userEvent.setup();
     renderRoute('book-1');
     await user.click(await screen.findByRole('button', { name: /new bronze list/i }));
 
-    const arg = vi.mocked(pages.create).mock.calls[0]?.[0];
-    expect(arg).toBeDefined();
-    expect(typeof arg!.createdAt).toBe('number');
-    expect(arg!.createdAt).toBeGreaterThan(0);
+    await screen.findByTestId('route-list-detail-probe');
+    const persisted = await pages.listByBook('book-1');
+    expect(persisted).toHaveLength(1);
+    expect(typeof persisted[0]!.createdAt).toBe('number');
+    expect(persisted[0]!.createdAt).toBeGreaterThan(0);
   });
 
   it('AC-3b: reviewableAt === createdAt + distillationIntervalDays*MS_PER_DAY — with 7-day fixture (kills hardcoded 14)', async () => {
@@ -207,49 +201,50 @@ describe('TASK-011 AC-3: per-Book overview — New-Bronze-List affordance', () =
     // hardcode would yield reviewableAt - createdAt = 14*MS_PER_DAY; we set
     // the fixture to 7 days so a regression that ignored book.settings and
     // hardcoded 14 would fail this exact equality.
-    vi.mocked(books.get).mockResolvedValue(
-      makeBook({
-        settings: {
-          distillationIntervalDays: 7,
-          headlistSize: 25,
-          autoDropOnHard: false,
-          autoDropOnModerate: true,
-          autoDropOnEasy: true,
-        },
-      }),
-    );
+    // Replace the default Book with one whose interval is 7.
+    await books.update('book-1', {
+      settings: {
+        distillationIntervalDays: 7,
+        headlistSize: 25,
+        autoDropOnHard: false,
+        autoDropOnModerate: true,
+        autoDropOnEasy: true,
+      },
+    });
     const user = userEvent.setup();
     renderRoute('book-1');
     await user.click(await screen.findByRole('button', { name: /new bronze list/i }));
 
-    const arg = vi.mocked(pages.create).mock.calls[0]?.[0];
-    expect(arg).toBeDefined();
-    expect(arg!.reviewableAt).not.toBeNull();
+    await screen.findByTestId('route-list-detail-probe');
+    const persisted = await pages.listByBook('book-1');
+    expect(persisted).toHaveLength(1);
+    const row = persisted[0]!;
+    expect(row.reviewableAt).not.toBeNull();
     // Computed equality. Sentinel — discriminates 7 from 14.
-    expect((arg!.reviewableAt as number) - arg!.createdAt).toBe(7 * MS_PER_DAY);
+    expect((row.reviewableAt as number) - row.createdAt).toBe(7 * MS_PER_DAY);
   });
 
-  it('AC-3b: reviewedAt === undefined on creation', async () => {
+  it('AC-3b: reviewedAt === undefined on the persisted Page', async () => {
     const user = userEvent.setup();
     renderRoute('book-1');
     await user.click(await screen.findByRole('button', { name: /new bronze list/i }));
 
-    const arg = vi.mocked(pages.create).mock.calls[0]?.[0];
-    expect(arg).toBeDefined();
-    expect(arg!.reviewedAt).toBeUndefined();
+    await screen.findByTestId('route-list-detail-probe');
+    const persisted = await pages.listByBook('book-1');
+    expect(persisted).toHaveLength(1);
+    expect(persisted[0]!.reviewedAt).toBeUndefined();
   });
 
-  it('AC-3c: after pages.create resolves, navigation lands on /list/<that-same-id>', async () => {
+  it('AC-3c: after the new Bronze List is persisted, navigation lands on /list/<persisted-id>', async () => {
     const user = userEvent.setup();
     renderRoute('book-1');
     await user.click(await screen.findByRole('button', { name: /new bronze list/i }));
-
-    const arg = vi.mocked(pages.create).mock.calls[0]?.[0];
-    expect(arg).toBeDefined();
-    const newId = arg!.id;
 
     // The probe receives the pageId param when /list/:pageId is matched.
     const probe = await screen.findByTestId('route-list-detail-probe');
+    const persisted = await pages.listByBook('book-1');
+    expect(persisted).toHaveLength(1);
+    const newId = persisted[0]!.id;
     expect(probe.textContent).toBe(newId);
     // And the pathname matches.
     expect(screen.getByTestId('probe-pathname').textContent).toBe(`/list/${newId}`);
@@ -274,36 +269,40 @@ describe('TASK-011 AC-3: per-Book overview — New-Bronze-List affordance', () =
 // ===========================================================================
 
 describe('TASK-011 AC-4: per-Book overview — gap-reuse on subsequent create', () => {
-  it('AC-4a: Book with ["Bronze 1","Bronze 3"] → click → pages.create with title === "Bronze 2"', async () => {
-    vi.mocked(pages.listByBook).mockResolvedValue([
-      makePage({ id: 'p1', title: 'Bronze 1', createdAt: 1000 }),
-      makePage({ id: 'p3', title: 'Bronze 3', createdAt: 3000 }),
-    ]);
+  it('AC-4a: Book with ["Bronze 1","Bronze 3"] → click → new Page persisted with title === "Bronze 2"', async () => {
+    await pages.create(makePage({ id: 'p1', title: 'Bronze 1', createdAt: 1000 }));
+    await pages.create(makePage({ id: 'p3', title: 'Bronze 3', createdAt: 3000 }));
     const user = userEvent.setup();
     renderRoute('book-1');
+    // Wait for the existing pages to render so the click's reuse-search runs
+    // against the loaded list.
+    await screen.findByTestId('page-row-p1');
 
     await user.click(await screen.findByRole('button', { name: /new bronze list/i }));
 
+    await screen.findByTestId('route-list-detail-probe');
+    const all = await pages.listByBook('book-1');
     // kills: length+1 (would give "Bronze 3"), max+1 (would give "Bronze 4"),
     // monotonic counter (likely "Bronze 4" or undefined).
-    expect(pages.create).toHaveBeenCalledWith(
-      expect.objectContaining({ title: 'Bronze 2' }),
-    );
+    const newRow = all.find((p) => p.id !== 'p1' && p.id !== 'p3');
+    expect(newRow).toBeDefined();
+    expect(newRow!.title).toBe('Bronze 2');
   });
 
   it('AC-4b: Book with only ["Silver 1"] → click → title === "Bronze 1" (non-Bronze ignored)', async () => {
-    vi.mocked(pages.listByBook).mockResolvedValue([
-      makePage({ id: 'p1', title: 'Silver 1', tier: 'silver', createdAt: 1000 }),
-    ]);
+    await pages.create(makePage({ id: 'p1', title: 'Silver 1', tier: 'silver', createdAt: 1000 }));
     const user = userEvent.setup();
     renderRoute('book-1');
+    await screen.findByTestId('page-row-p1');
 
     await user.click(await screen.findByRole('button', { name: /new bronze list/i }));
 
+    await screen.findByTestId('route-list-detail-probe');
+    const all = await pages.listByBook('book-1');
+    const newRow = all.find((p) => p.id !== 'p1');
+    expect(newRow).toBeDefined();
     // kills: counting all pages regardless of tier (would give "Bronze 2").
-    expect(pages.create).toHaveBeenCalledWith(
-      expect.objectContaining({ title: 'Bronze 1' }),
-    );
+    expect(newRow!.title).toBe('Bronze 1');
   });
 });
 
@@ -315,11 +314,9 @@ describe('TASK-011 AC-5: per-Book overview — existing-Lists rendering', () => 
   it('AC-5a: DOM order of page-row-* matches createdAt-desc — non-monotonic fixture', async () => {
     // Fixture deliberately non-monotonic in id-order so a naive sort by id
     // (or insertion order) would fail.
-    vi.mocked(pages.listByBook).mockResolvedValue([
-      makePage({ id: 'first', title: 'Bronze 1', createdAt: 1000 }),
-      makePage({ id: 'last', title: 'Bronze 2', createdAt: 3000 }),
-      makePage({ id: 'middle', title: 'Bronze 3', createdAt: 2000 }),
-    ]);
+    await pages.create(makePage({ id: 'first', title: 'Bronze 1', createdAt: 1000 }));
+    await pages.create(makePage({ id: 'last', title: 'Bronze 2', createdAt: 3000 }));
+    await pages.create(makePage({ id: 'middle', title: 'Bronze 3', createdAt: 2000 }));
     renderRoute('book-1');
 
     // findAllByTestId would match prefix only with regex; use querySelectorAll
@@ -338,10 +335,8 @@ describe('TASK-011 AC-5: per-Book overview — existing-Lists rendering', () => 
   });
 
   it('AC-5b: each row has a link with href ending in #/list/<pageId> (HashRouter form)', async () => {
-    vi.mocked(pages.listByBook).mockResolvedValue([
-      makePage({ id: 'abc', title: 'Bronze 1', createdAt: 1000 }),
-      makePage({ id: 'def', title: 'Bronze 2', createdAt: 2000 }),
-    ]);
+    await pages.create(makePage({ id: 'abc', title: 'Bronze 1', createdAt: 1000 }));
+    await pages.create(makePage({ id: 'def', title: 'Bronze 2', createdAt: 2000 }));
     renderRoute('book-1');
     await screen.findByTestId('pages-list');
 
@@ -355,9 +350,7 @@ describe('TASK-011 AC-5: per-Book overview — existing-Lists rendering', () => 
   });
 
   it('AC-5c: bronze row contains an element with the bronze borderClass substring', async () => {
-    vi.mocked(pages.listByBook).mockResolvedValue([
-      makePage({ id: 'bronzed', title: 'Bronze 1', tier: 'bronze', createdAt: 1000 }),
-    ]);
+    await pages.create(makePage({ id: 'bronzed', title: 'Bronze 1', tier: 'bronze', createdAt: 1000 }));
     renderRoute('book-1');
     const row = await screen.findByTestId('page-row-bronzed');
     const bronzeBorder = tierVisual('bronze').borderClass;
@@ -370,9 +363,7 @@ describe('TASK-011 AC-5: per-Book overview — existing-Lists rendering', () => 
   });
 
   it('AC-5c: bronze row contains a role="status" element with aria-label === "Bronze"', async () => {
-    vi.mocked(pages.listByBook).mockResolvedValue([
-      makePage({ id: 'bronzed', title: 'Bronze 1', tier: 'bronze', createdAt: 1000 }),
-    ]);
+    await pages.create(makePage({ id: 'bronzed', title: 'Bronze 1', tier: 'bronze', createdAt: 1000 }));
     renderRoute('book-1');
     const row = await screen.findByTestId('page-row-bronzed');
     const badge = within(row).getByRole('status');
@@ -384,9 +375,7 @@ describe('TASK-011 AC-5: per-Book overview — existing-Lists rendering', () => 
     // silver Page must render the silver primitives, not bronze. Without
     // this assertion a hardcoded `<TierBorder tier="bronze">` would slip
     // past AC-5c's bronze check.
-    vi.mocked(pages.listByBook).mockResolvedValue([
-      makePage({ id: 'silvered', title: 'Silver 1', tier: 'silver', createdAt: 1000 }),
-    ]);
+    await pages.create(makePage({ id: 'silvered', title: 'Silver 1', tier: 'silver', createdAt: 1000 }));
     renderRoute('book-1');
     const row = await screen.findByTestId('page-row-silvered');
     const silverBorder = tierVisual('silver').borderClass;
@@ -412,7 +401,6 @@ describe('TASK-011 AC-5: per-Book overview — existing-Lists rendering', () => 
 
 describe('TASK-011 AC-6: per-Book overview — empty state', () => {
   it('AC-6a: zero Pages → getByTestId("pages-empty") text matches exact copy', async () => {
-    vi.mocked(pages.listByBook).mockResolvedValue([]);
     renderRoute('book-1');
 
     const empty = await screen.findByTestId('pages-empty');
@@ -423,9 +411,7 @@ describe('TASK-011 AC-6: per-Book overview — empty state', () => {
   });
 
   it('AC-6b: empty-state is NOT in the DOM when at least one Page exists', async () => {
-    vi.mocked(pages.listByBook).mockResolvedValue([
-      makePage({ id: 'x', title: 'Bronze 1', createdAt: 1000 }),
-    ]);
+    await pages.create(makePage({ id: 'x', title: 'Bronze 1', createdAt: 1000 }));
     renderRoute('book-1');
     // Wait for the list to render so the await is not racey.
     await screen.findByTestId('pages-list');
@@ -433,7 +419,6 @@ describe('TASK-011 AC-6: per-Book overview — empty state', () => {
   });
 
   it('AC-6c: New-Bronze-List button is present regardless of empty state — empty case', async () => {
-    vi.mocked(pages.listByBook).mockResolvedValue([]);
     renderRoute('book-1');
     expect(
       await screen.findByRole('button', { name: /new bronze list/i }),
@@ -441,9 +426,7 @@ describe('TASK-011 AC-6: per-Book overview — empty state', () => {
   });
 
   it('AC-6c: New-Bronze-List button is present regardless of empty state — non-empty case', async () => {
-    vi.mocked(pages.listByBook).mockResolvedValue([
-      makePage({ id: 'x', title: 'Bronze 1', createdAt: 1000 }),
-    ]);
+    await pages.create(makePage({ id: 'x', title: 'Bronze 1', createdAt: 1000 }));
     renderRoute('book-1');
     expect(
       await screen.findByRole('button', { name: /new bronze list/i }),
@@ -454,7 +437,9 @@ describe('TASK-011 AC-6: per-Book overview — empty state', () => {
     // Architectural note: the route reads bookId from useParams and renders
     // the Book name as <h1>. A regression that displayed bookId or "Book"
     // as a placeholder would fail.
-    vi.mocked(books.get).mockResolvedValue(makeBook({ name: 'Polish' }));
+    // Reseed the default Book under a different name. The default seed in
+    // beforeEach gave it "Japanese"; replace via books.update.
+    await books.update('book-1', { name: 'Polish' });
     renderRoute('book-1');
     const h1 = await screen.findByRole('heading', { level: 1, name: /polish/i });
     expect(h1).toBeInTheDocument();
