@@ -621,6 +621,42 @@ describe('CHORE-004 AC-3: malformed-row — pages table', () => {
     // AC-8 mutation trap: typeof === 'number' would let NaN through; Number.isFinite catches it.
     expectMalformedRow(result, 'pages', 1);
   });
+
+  // Build an own-key __proto__ element for the cardIds array — see comment on
+  // the cards parentIds case below for the rationale.
+  function ownProtoElement(): unknown {
+    const o: Record<string, unknown> = {};
+    Object.defineProperty(o, '__proto__', {
+      value: { polluted: true },
+      enumerable: true, writable: true, configurable: true,
+    });
+    return o;
+  }
+
+  // CHORE-004 review-kickback Finding A (security MAJOR): Array.isArray alone
+  // is not enough — each element of `cardIds` must be a non-empty string.
+  // Otherwise an attacker can inject numbers, nulls, empty strings, or
+  // prototype-pollution-adjacent objects via the array.
+  it.each<[string, unknown]>([
+    ['number element [123]', [123]],
+    ['empty-string element [""]', ['']],
+    ['null element [null]', [null]],
+    ['plain-object element [{}]', [{}]],
+    ['__proto__-own-key element', [ownProtoElement()]],
+    ['mixed valid + bad ["ok", 42]', ['ok', 42]],
+  ])(
+    'CHORE-004 Finding A: pages[0] cardIds containing %s → malformed-row table=pages index=1',
+    (_label, cardIds) => {
+      // MUTATION: Array.isArray alone (no element check) would accept this and
+      // let unsafe values through.
+      const badPage = {
+        ...makePage({ id: 'P1', bookId: 'B1' }),
+        cardIds: cardIds as unknown as string[],
+      };
+      const result = parseExport(envWith({ pages: [badPage] }));
+      expectMalformedRow(result, 'pages', 1);
+    },
+  );
 });
 
 describe('CHORE-004 AC-3: malformed-row — cards table', () => {
@@ -648,6 +684,38 @@ describe('CHORE-004 AC-3: malformed-row — cards table', () => {
     const result = parseExport(envWith({ cards: [badCard] }));
     expectMalformedRow(result, 'cards', 1);
   });
+
+  // CHORE-004 review-kickback Finding A (security MAJOR): Array.isArray alone
+  // is not enough — each element of `parentIds` must be a non-empty string.
+  // Mirror the cardIds matrix; assignment to `__proto__` would set the prototype
+  // (not an own key), so we use defineProperty to create an own enumerable
+  // __proto__ element — the actual prototype-pollution-adjacent vector.
+  it.each<[string, unknown]>([
+    ['number element [42]', [42]],
+    ['null element [null]', [null]],
+    ['empty-string element [""]', ['']],
+    ['mixed valid + bad ["ok", 7]', ['ok', 7]],
+    ['__proto__-own-key element', (() => {
+      const o: Record<string, unknown> = {};
+      Object.defineProperty(o, '__proto__', {
+        value: { polluted: true },
+        enumerable: true, writable: true, configurable: true,
+      });
+      return [o];
+    })()],
+  ])(
+    'CHORE-004 Finding A: cards[0] parentIds containing %s → malformed-row table=cards index=1',
+    (_label, parentIds) => {
+      // MUTATION: Array.isArray alone (no element check) would accept this and
+      // let unsafe values through.
+      const badCard = {
+        ...makeCard({ id: 'C1', bookId: 'B1', pageId: 'P1' }),
+        parentIds: parentIds as unknown as string[],
+      };
+      const result = parseExport(envWith({ cards: [badCard] }));
+      expectMalformedRow(result, 'cards', 1);
+    },
+  );
 });
 
 describe('CHORE-004 AC-3: malformed-row — reviews table', () => {
