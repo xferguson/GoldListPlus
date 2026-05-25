@@ -1,25 +1,19 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter, useLocation } from 'react-router-dom';
 import { AppRoutes } from '../../App';
 import { DEFAULT_BOOK_SETTINGS } from '../../lib/defaults';
 import { useAppStore } from '../../stores/useAppStore';
+import { db } from '../../db/db';
 import * as books from '../../db/repos/books';
 
 // ---------------------------------------------------------------------------
-// books repo is module-mocked so we can spy on books.create without touching
-// IndexedDB. `vi.mock` is hoisted so we must reference the path the SUT
-// uses; from src/routes/Book/NewBook.tsx that is "../../db/repos/books".
+// Real Dexie + fake-indexeddb. We seed and observe via the real `books` repo
+// so the test reflects what the user observes (rows in the DB), not the call
+// shape of an in-memory mock. The close/delete/open dance mirrors
+// src/db/repos/pages.test.ts:35-47.
 // ---------------------------------------------------------------------------
-
-vi.mock('../../db/repos/books', () => ({
-  create: vi.fn(),
-  get: vi.fn(),
-  update: vi.fn(),
-  list: vi.fn(),
-  remove: vi.fn(),
-}));
 
 // Sibling probe — renders the current location.pathname as a unique testid.
 // Mounted inside <MemoryRouter> alongside <AppRoutes/> so tests can observe
@@ -47,12 +41,21 @@ function renderAt(path: string) {
   );
 }
 
-beforeEach(() => {
-  vi.mocked(books.create).mockReset();
-  // Default behaviour: resolved success. Individual tests override.
-  vi.mocked(books.create).mockResolvedValue(undefined);
+beforeEach(async () => {
+  if (db.isOpen()) {
+    db.close();
+  }
+  await db.delete();
+  await db.open();
   // Reset app store between tests so we never observe cross-test leakage.
   useAppStore.getState().setCurrentBookId(null);
+});
+
+afterEach(async () => {
+  vi.restoreAllMocks();
+  if (db.isOpen()) {
+    db.close();
+  }
 });
 
 // ---------------------------------------------------------------------------
@@ -71,10 +74,13 @@ describe('TASK-010 AC-2: /book/new route is registered before /book/:bookId', ()
 
   // kills: registering /book/new so eagerly that it eats all /book/* (e.g.
   // path="/book/*"). The param route must still resolve for real IDs.
-  it('TASK-010 AC-2: visiting /book/abc123 still renders route-book (param route not eaten)', () => {
+  it('TASK-010 AC-2: visiting /book/abc123 still renders route-book (param route not eaten)', async () => {
     renderAt('/book/abc123');
     expect(screen.getByTestId('route-book')).toBeInTheDocument();
     expect(screen.queryByTestId('route-new-book')).not.toBeInTheDocument();
+    // Wait for the Book route's load effect to settle (no row for 'abc123' so
+    // the empty-state and not-found marker render once books.get resolves).
+    await screen.findByTestId('book-not-found');
   });
 });
 
@@ -138,13 +144,13 @@ describe('TASK-010 AC-3: initial form state', () => {
 // ---------------------------------------------------------------------------
 
 describe('TASK-010 AC-4: empty-form submit is blocked with all three inline errors', () => {
-  it('TASK-010 AC-4: clicking Create Book with all fields empty does NOT call books.create', async () => {
+  it('TASK-010 AC-4: clicking Create Book with all fields empty does NOT write a Book row', async () => {
     const user = userEvent.setup();
     renderAtNewBook();
     await user.click(screen.getByRole('button', { name: /create book/i }));
     // kills: a submit handler that calls books.create unconditionally and
-    // relies on the DB to reject.
-    expect(books.create).not.toHaveBeenCalled();
+    // relies on the DB to reject. Observe outcome (no row) rather than call shape.
+    expect(await books.list()).toEqual([]);
   });
 
   it('TASK-010 AC-4: clicking Create Book with all fields empty does NOT navigate away from /book/new', async () => {
@@ -192,7 +198,7 @@ describe('TASK-010 AC-4: empty-form submit is blocked with all three inline erro
 describe('TASK-010 AC-4: partial-fill submit', () => {
   // The "only name filled" matrix row from the AC. Submit must still be
   // blocked because two required fields are empty.
-  it('TASK-010 AC-4: name-only filled → error-name absent, error-sourceLang + error-targetLang present, no books.create call', async () => {
+  it('TASK-010 AC-4: name-only filled → error-name absent, error-sourceLang + error-targetLang present, no Book row written', async () => {
     const user = userEvent.setup();
     renderAtNewBook();
     await user.type(screen.getByLabelText(/^name$/i), 'Japanese');
@@ -201,7 +207,7 @@ describe('TASK-010 AC-4: partial-fill submit', () => {
     expect(screen.queryByTestId('error-name')).not.toBeInTheDocument();
     expect(screen.getByTestId('error-sourceLang')).toBeInTheDocument();
     expect(screen.getByTestId('error-targetLang')).toBeInTheDocument();
-    expect(books.create).not.toHaveBeenCalled();
+    expect(await books.list()).toEqual([]);
     expect(screen.getByTestId('probe-pathname').textContent).toBe('/book/new');
   });
 });
@@ -242,7 +248,7 @@ describe('TASK-010 AC-4: typing into a field clears that field\'s error', () => 
 describe('TASK-010 AC-4: whitespace-only name is treated as empty', () => {
   // kills: a validator that uses `value.length > 0` without trimming. PRD §5.1:
   // "name is trimmed and limited to 1–80 characters."
-  it('TASK-010 AC-4: name "   " with both langs filled → error-name with required-copy, no books.create call', async () => {
+  it('TASK-010 AC-4: name "   " with both langs filled → error-name with required-copy, no Book row written', async () => {
     const user = userEvent.setup();
     renderAtNewBook();
     await user.type(screen.getByLabelText(/^name$/i), '   ');
@@ -253,7 +259,7 @@ describe('TASK-010 AC-4: whitespace-only name is treated as empty', () => {
     const errName = screen.getByTestId('error-name');
     expect(errName).toBeInTheDocument();
     expect(errName.textContent).toBe('Name is required');
-    expect(books.create).not.toHaveBeenCalled();
+    expect(await books.list()).toEqual([]);
   });
 });
 
@@ -288,7 +294,7 @@ describe('TASK-010 AC-4: name longer than 80 chars after trim is rejected with t
     expect(errName).toBeInTheDocument();
     // Exact copy from the locked DOM contract:
     expect(errName.textContent).toBe('Name must be 80 characters or fewer');
-    expect(books.create).not.toHaveBeenCalled();
+    expect(await books.list()).toEqual([]);
   });
 
   // The input element itself must declare maxLength=80 so most users never
@@ -305,9 +311,9 @@ describe('TASK-010 AC-4: name longer than 80 chars after trim is rejected with t
 // TASK-010 AC-5: successful submit persists with defaults and navigates
 // ---------------------------------------------------------------------------
 
-describe('TASK-010 AC-5: successful submit calls books.create with the right shape and navigates', () => {
+describe('TASK-010 AC-5: successful submit persists with defaults and navigates', () => {
   // The matrix:
-  //   - books.create called exactly once
+  //   - exactly one Book row written
   //   - id: 26-char ULID (matches /^[0-9A-HJKMNP-TV-Z]{26}$/)
   //   - name: trimmed
   //   - sourceLang / targetLang: trimmed
@@ -316,7 +322,7 @@ describe('TASK-010 AC-5: successful submit calls books.create with the right sha
   //   - navigation to /book/<id>
   //   - useAppStore.currentBookId === id
 
-  it('TASK-010 AC-5: calls books.create exactly once with the trimmed values and ULID-shaped id', async () => {
+  it('TASK-010 AC-5: writes exactly one Book row with the trimmed values, ULID id, and default settings', async () => {
     const user = userEvent.setup();
     renderAtNewBook();
 
@@ -325,24 +331,26 @@ describe('TASK-010 AC-5: successful submit calls books.create with the right sha
     await user.type(screen.getByLabelText(/target language/i), 'ja');
     await user.click(screen.getByRole('button', { name: /create book/i }));
 
-    expect(books.create).toHaveBeenCalledTimes(1);
+    // Wait for navigation + the Book route's load effect to settle (otherwise
+    // React logs act() warnings as the route's useEffect resolves after the
+    // test body ends).
+    await screen.findByTestId('pages-empty');
+    const all = await books.list();
+    expect(all).toHaveLength(1);
+    const persisted = all[0]!;
     // The mutation challenge: an implementer who copies the raw form values
     // (no trim) would fail the trimmed-name assertion below; an implementer
     // who uses crypto.randomUUID() (36-char with dashes) instead of newId()
     // would fail the ULID regex; an implementer who omits settings entirely
     // would fail the deep-equal.
-    expect(books.create).toHaveBeenCalledWith(
-      expect.objectContaining({
-        id: expect.stringMatching(/^[0-9A-HJKMNP-TV-Z]{26}$/),
-        name: 'Japanese',
-        sourceLang: 'en',
-        targetLang: 'ja',
-        settings: DEFAULT_BOOK_SETTINGS,
-      }),
-    );
+    expect(persisted.id).toMatch(/^[0-9A-HJKMNP-TV-Z]{26}$/);
+    expect(persisted.name).toBe('Japanese');
+    expect(persisted.sourceLang).toBe('en');
+    expect(persisted.targetLang).toBe('ja');
+    expect(persisted.settings).toEqual(DEFAULT_BOOK_SETTINGS);
   });
 
-  it('TASK-010 AC-5: createdAt is a positive number (not a Date, not 0)', async () => {
+  it('TASK-010 AC-5: createdAt on the persisted row is a positive number (not a Date, not 0)', async () => {
     const user = userEvent.setup();
     renderAtNewBook();
     await user.type(screen.getByLabelText(/^name$/i), 'Japanese');
@@ -350,19 +358,20 @@ describe('TASK-010 AC-5: successful submit calls books.create with the right sha
     await user.type(screen.getByLabelText(/target language/i), 'ja');
     await user.click(screen.getByRole('button', { name: /create book/i }));
 
-    expect(books.create).toHaveBeenCalledTimes(1);
-    const arg = vi.mocked(books.create).mock.calls[0]?.[0];
-    expect(arg).toBeDefined();
+    await screen.findByTestId('pages-empty');
+    const all = await books.list();
+    expect(all).toHaveLength(1);
+    const persisted = all[0]!;
     // kills: passing `new Date()` (object) or omitting createdAt entirely
     // (which would be a schema violation when Dexie persists).
-    expect(typeof arg!.createdAt).toBe('number');
-    expect(arg!.createdAt).toBeGreaterThan(0);
+    expect(typeof persisted.createdAt).toBe('number');
+    expect(persisted.createdAt).toBeGreaterThan(0);
   });
 
   // The settings deep-equal is enough on its own — but if a single autoDrop
   // flag flipped between defaults.ts and the spread into the new Book, the
   // toEqual above would fail. This is the explicit anchor.
-  it('TASK-010 AC-5: settings are deeply equal to DEFAULT_BOOK_SETTINGS (no per-field drift)', async () => {
+  it('TASK-010 AC-5: persisted settings are deeply equal to DEFAULT_BOOK_SETTINGS (no per-field drift)', async () => {
     const user = userEvent.setup();
     renderAtNewBook();
     await user.type(screen.getByLabelText(/^name$/i), 'Japanese');
@@ -370,8 +379,10 @@ describe('TASK-010 AC-5: successful submit calls books.create with the right sha
     await user.type(screen.getByLabelText(/target language/i), 'ja');
     await user.click(screen.getByRole('button', { name: /create book/i }));
 
-    const arg = vi.mocked(books.create).mock.calls[0]?.[0];
-    expect(arg?.settings).toEqual(DEFAULT_BOOK_SETTINGS);
+    await screen.findByTestId('pages-empty');
+    const all = await books.list();
+    expect(all).toHaveLength(1);
+    expect(all[0]!.settings).toEqual(DEFAULT_BOOK_SETTINGS);
   });
 
   // PRD §5.1: "any non-empty trimmed string is accepted" — format validation
@@ -385,19 +396,17 @@ describe('TASK-010 AC-5: successful submit calls books.create with the right sha
     await user.type(screen.getByLabelText(/target language/i), '  ja-JP  ');
     await user.click(screen.getByRole('button', { name: /create book/i }));
 
-    expect(books.create).toHaveBeenCalledTimes(1);
-    expect(books.create).toHaveBeenCalledWith(
-      expect.objectContaining({
-        sourceLang: 'foo-bar-baz',
-        targetLang: 'ja-JP',
-      }),
-    );
+    await screen.findByTestId('pages-empty');
+    const all = await books.list();
+    expect(all).toHaveLength(1);
+    expect(all[0]!.sourceLang).toBe('foo-bar-baz');
+    expect(all[0]!.targetLang).toBe('ja-JP');
   });
 
   // The navigation assertion. We observe the URL via the LocationProbe rather
   // than spying on useNavigate — that way a refactor to <Navigate to=...> or
   // any other mechanism still satisfies the contract.
-  it('TASK-010 AC-5: after successful submit, location.pathname is /book/<the-same-id-as-passed-to-books.create>', async () => {
+  it('TASK-010 AC-5: after successful submit, location.pathname is /book/<persisted-id>', async () => {
     const user = userEvent.setup();
     renderAtNewBook();
     await user.type(screen.getByLabelText(/^name$/i), 'Japanese');
@@ -405,15 +414,16 @@ describe('TASK-010 AC-5: successful submit calls books.create with the right sha
     await user.type(screen.getByLabelText(/target language/i), 'ja');
     await user.click(screen.getByRole('button', { name: /create book/i }));
 
-    const arg = vi.mocked(books.create).mock.calls[0]?.[0];
-    expect(arg).toBeDefined();
-    const id = arg!.id;
+    await screen.findByTestId('pages-empty');
+    const all = await books.list();
+    expect(all).toHaveLength(1);
+    const id = all[0]!.id;
     // kills: an implementer that navigates to /book/new (a no-op),
     // /book/undefined (forgot to read the new id), or /books/<id> (typo).
     expect(screen.getByTestId('probe-pathname').textContent).toBe(`/book/${id}`);
   });
 
-  it('TASK-010 AC-5: after successful submit, useAppStore.currentBookId === the new book id', async () => {
+  it('TASK-010 AC-5: after successful submit, useAppStore.currentBookId === the persisted id', async () => {
     const user = userEvent.setup();
     renderAtNewBook();
     await user.type(screen.getByLabelText(/^name$/i), 'Japanese');
@@ -421,9 +431,10 @@ describe('TASK-010 AC-5: successful submit calls books.create with the right sha
     await user.type(screen.getByLabelText(/target language/i), 'ja');
     await user.click(screen.getByRole('button', { name: /create book/i }));
 
-    const arg = vi.mocked(books.create).mock.calls[0]?.[0];
-    expect(arg).toBeDefined();
-    const id = arg!.id;
+    await screen.findByTestId('pages-empty');
+    const all = await books.list();
+    expect(all).toHaveLength(1);
+    const id = all[0]!.id;
     // kills: forgetting to call setCurrentBookId — downstream screens
     // (TASK-011, TASK-016) would have to repo-round-trip to learn "the Book
     // the user just created".
@@ -432,10 +443,10 @@ describe('TASK-010 AC-5: successful submit calls books.create with the right sha
 });
 
 describe('TASK-010 AC-5: rejection path keeps the form alive and surfaces error-submit', () => {
-  // The mocked rejection — independent test so the success-path mock is
-  // not contaminated.
-  it('TASK-010 AC-5: if books.create rejects, no navigation occurs and form values remain', async () => {
-    vi.mocked(books.create).mockRejectedValueOnce(new Error('disk full'));
+  // Force the underlying Dexie write to reject so the real books.create
+  // throws. Observe outcome: no row persisted, no navigation, error alert.
+  it('TASK-010 AC-5: if the underlying write rejects, no Book row is persisted and no navigation occurs', async () => {
+    vi.spyOn(db.books, 'add').mockRejectedValueOnce(new Error('disk full'));
     const user = userEvent.setup();
     renderAtNewBook();
 
@@ -444,6 +455,11 @@ describe('TASK-010 AC-5: rejection path keeps the form alive and surfaces error-
     await user.type(screen.getByLabelText(/target language/i), 'ja');
     await user.click(screen.getByRole('button', { name: /create book/i }));
 
+    // Wait for the error alert to confirm the rejection has been handled.
+    await screen.findByTestId('error-submit');
+
+    // No row was persisted.
+    expect(await books.list()).toEqual([]);
     // kills: an optimistic-navigation pattern that navigates before awaiting
     // books.create, then leaves the user on a broken /book/<id> page when
     // the write fails.
@@ -455,8 +471,8 @@ describe('TASK-010 AC-5: rejection path keeps the form alive and surfaces error-
     expect((screen.getByLabelText(/target language/i) as HTMLInputElement).value).toBe('ja');
   });
 
-  it('TASK-010 AC-5: if books.create rejects, an error-submit alert is rendered', async () => {
-    vi.mocked(books.create).mockRejectedValueOnce(new Error('disk full'));
+  it('TASK-010 AC-5: if the underlying write rejects, an error-submit alert is rendered', async () => {
+    vi.spyOn(db.books, 'add').mockRejectedValueOnce(new Error('disk full'));
     const user = userEvent.setup();
     renderAtNewBook();
 
@@ -468,13 +484,15 @@ describe('TASK-010 AC-5: rejection path keeps the form alive and surfaces error-
     // kills: a silent rejection-swallowing handler (the user would think
     // the click did nothing). The locked contract is "error-submit" with
     // role="alert" so screen readers announce it.
-    const errSubmit = screen.getByTestId('error-submit');
+    const errSubmit = await screen.findByTestId('error-submit');
     expect(errSubmit).toBeInTheDocument();
     expect(errSubmit.getAttribute('role')).toBe('alert');
+    // No row should have been written.
+    expect(await books.list()).toEqual([]);
   });
 
-  it('TASK-010 AC-5: if books.create rejects, useAppStore.currentBookId stays null', async () => {
-    vi.mocked(books.create).mockRejectedValueOnce(new Error('disk full'));
+  it('TASK-010 AC-5: if the underlying write rejects, useAppStore.currentBookId stays null', async () => {
+    vi.spyOn(db.books, 'add').mockRejectedValueOnce(new Error('disk full'));
     const user = userEvent.setup();
     renderAtNewBook();
 
@@ -483,9 +501,11 @@ describe('TASK-010 AC-5: rejection path keeps the form alive and surfaces error-
     await user.type(screen.getByLabelText(/target language/i), 'ja');
     await user.click(screen.getByRole('button', { name: /create book/i }));
 
+    await screen.findByTestId('error-submit');
     // kills: an implementer who sets currentBookId before awaiting
     // books.create, leaving the store pointing at a Book that never made
     // it to disk.
     expect(useAppStore.getState().currentBookId).toBeNull();
+    expect(await books.list()).toEqual([]);
   });
 });
