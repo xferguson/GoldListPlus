@@ -6,9 +6,9 @@
 
 Polite AI code review is a known failure mode: a single reviewer reads the diff, finds the obvious issues, softens its tone, and approves. The harder issues — Single-Responsibility violations, untestable seams, missing failure-path coverage, sensitive data in logs, speculative abstractions — get rounded off into "consider…" and slip through.
 
-This project's review system replaces that single reviewer with **nine strict specialists** dispatched in parallel. Each owns one principle and refuses to wave its findings through. Their reports are consolidated by an orchestrator into a single merge verdict.
+This project's review system replaces that single reviewer with **ten strict specialists** dispatched in parallel — nine narrow single-principle reviewers and one project-invariant generalist. Each refuses to wave its findings through. Their reports are consolidated by an orchestrator into a single merge verdict. An append-only notes archive at `docs/CODE_REVIEW_NOTES.md` carries precedent and lessons-learned across reviews, read by the orchestrator only when relevant.
 
-## The nine reviewers
+## The ten reviewers
 
 Each lives at `.claude/agents/reviewer-<name>.md`. Each has its own detailed checklist, severity definitions, anti-pattern catalogue, and worked examples.
 
@@ -23,8 +23,20 @@ Each lives at `.claude/agents/reviewer-<name>.md`. Each has its own detailed che
 | `reviewer-observability` | Debuggability at 3am | String-concatenated log messages, wrong log levels, PII in logs (Card source/target text!), missing logs on new error paths, silent SW lifecycle. |
 | `reviewer-security` | Threat model | XSS via `dangerouslySetInnerHTML`, missing validation at trust boundaries (file import, URL hash), SW scope widening beyond `/GoldListPlus/`, secrets in source, unaudited new deps. |
 | `reviewer-testability` | Honest tests | `Date.now()` / `Math.random()` in `src/lib/**` (§3.6), tests that mock everything and assert on calls, mocking Dexie instead of fake-indexeddb, "manually verified" justifications. |
+| `reviewer-generic` | Project invariants (bundled) | PRD §8 sacred rules, ARCHITECTURE §3 layering instances, data-model drift (numeric tier, boolean archive), suite health (`npm run test/typecheck/lint`), dependency ledger entries, SW scope. Intentionally cross-cutting. |
 
-The orchestrator is `code-reviewer` (kept under that name so the existing subagent workflow in `CLAUDE.md` still routes to it).
+The orchestrator is `code-reviewer` (kept under that name so the existing subagent workflow in `CLAUDE.md` still routes to it). It also maintains the notes archive (see below).
+
+## The notes archive
+
+`docs/CODE_REVIEW_NOTES.md` is an append-only record of noteworthy findings, waivers, and cross-cutting precedents. It carries memory across PRs so the orchestrator can recognise recurrences and so humans can audit the history.
+
+- **Read it when:** a specialist's finding looks like a recurrence of a `P-NNN` precedent; a `MAJOR` waiver is proposed and you want to check prior decisions; a pattern in the current diff matches a precedent (cross-link rather than re-explain).
+- **Skip it when:** clean diff with no findings; specialist dispatch (specialists don't read it); only `MINOR`/`NIT` findings.
+- **Append to it when:** a `BLOCKER` was filed and fixed; a `MAJOR` was filed and fixed or waived; a finding establishes or instantiates a precedent; the PR creates a new project-wide convention.
+- **Don't append:** clean approvals; routine `MINOR`/`NIT`; specialist reports verbatim (the entry is a summary, not a transcript).
+
+The orchestrator writes entries via the `Edit` tool (it has Edit specifically for appending to this file; it does not edit code under review). Specialists never write to the archive — that would scatter writes and bloat their contexts.
 
 ## Severity levels
 
@@ -41,19 +53,19 @@ Reviewers are biased toward `BLOCKER` / `MAJOR` for true violations. Inflating s
 
 ### Full review (default — every PR)
 
-Dispatch all nine reviewers in parallel.
+Dispatch all ten reviewers in parallel.
 
-**Recommended path:** invoke the `code-reviewer` orchestrator. It fires the nine specialists in parallel and returns one consolidated report.
+**Recommended path:** invoke the `code-reviewer` orchestrator. It fires the ten specialists in parallel and returns one consolidated report.
 
 ```
 Agent({
   subagent_type: "code-reviewer",
   description: "Code review TASK-NNN PR",
-  prompt: "Review the diff origin/main..HEAD on branch feat/task-NNN. The PR claims TASK-NNN per docs/TASKS.md. Dispatch all nine specialists in parallel per CODE_REVIEW.md and return the consolidated report."
+  prompt: "Review the diff origin/main..HEAD on branch feat/task-NNN. The PR claims TASK-NNN per docs/TASKS.md. Dispatch all ten specialists in parallel per CODE_REVIEW.md and return the consolidated report."
 })
 ```
 
-**Manual fallback:** if the harness restricts subagent-to-subagent dispatch (the orchestrator will report `BLOCKED` if so), the main thread dispatches all nine directly in a single message:
+**Manual fallback:** if the harness restricts subagent-to-subagent dispatch (the orchestrator will report `BLOCKED` if so), the main thread dispatches all ten directly in a single message:
 
 ```
 Agent({ subagent_type: "reviewer-complexity",     description: "...", prompt: "..." })
@@ -65,9 +77,10 @@ Agent({ subagent_type: "reviewer-error-handling", description: "...", prompt: ".
 Agent({ subagent_type: "reviewer-observability",  description: "...", prompt: "..." })
 Agent({ subagent_type: "reviewer-security",       description: "...", prompt: "..." })
 Agent({ subagent_type: "reviewer-testability",    description: "...", prompt: "..." })
+Agent({ subagent_type: "reviewer-generic",        description: "...", prompt: "..." })
 ```
 
-All nine dispatched together. Collect the nine reports, consolidate manually per the rules below.
+All ten dispatched together. Collect the ten reports, consolidate manually per the rules below. If you take the manual fallback, you (the main thread) are also responsible for the post-consolidation append to `docs/CODE_REVIEW_NOTES.md` when warranted.
 
 ### Each specialist's dispatch prompt — skeleton
 
@@ -92,11 +105,11 @@ When dispatching a subset, document in the dispatch prompt which specialists you
 
 ### Whole-codebase review
 
-To audit the entire codebase (e.g. before a milestone, or quarterly), dispatch all nine against the full `src/` tree (no base ref — they review the current state, not a diff). Each specialist's checklist still applies; expect more findings, longer reports.
+To audit the entire codebase (e.g. before a milestone, or quarterly), dispatch all ten against the full `src/` tree (no base ref — they review the current state, not a diff). Each specialist's checklist still applies; expect more findings, longer reports.
 
 ## Consolidation rules
 
-When you have the nine reports, produce a single consolidated review with the structure documented in `.claude/agents/code-reviewer.md` under "Step 4 — Consolidate." Key rules:
+When you have the ten reports, produce a single consolidated review with the structure documented in `.claude/agents/code-reviewer.md` under "Step 4 — Consolidate." Key rules:
 
 1. **Group findings by severity across all specialists.** BLOCKERs first (from any reviewer), then MAJORs, then MINORs, then NITs. Tag each finding with which specialist filed it.
 2. **Preserve specialist wording.** Do not soften, paraphrase, or downgrade. If reviewer-security said BLOCKER, it's a BLOCKER in the consolidated report.
@@ -108,7 +121,7 @@ When you have the nine reports, produce a single consolidated review with the st
 
 | Verdict pattern | Merge decision |
 |---|---|
-| All nine specialists `APPROVE` | **Merge OK** (subject to PR requirements like CI). |
+| All ten specialists `APPROVE` | **Merge OK** (subject to PR requirements like CI). |
 | Any one specialist `BLOCKER` | **REQUEST_CHANGES.** Fix the BLOCKER. Cannot merge. |
 | Any one specialist `MAJOR` with no waiver | **REQUEST_CHANGES.** Fix the MAJOR, or attach a tech-lead-signed waiver with justification and a tracked follow-up. |
 | Any specialist `NEEDS_INFO` | Overall `NEEDS_INFO`. Provide what the specialist asked for; re-run. |
@@ -124,13 +137,13 @@ The tech-lead second-pass (per `.claude/agents/tech-lead.md`) confirms waivers a
 
 Per `CLAUDE.md`'s subagent workflow, the code review happens:
 
-1. **After the Implementer reports green tests.** The orchestrator (or main thread, manually) fires the nine specialists.
+1. **After the Implementer reports green tests.** The orchestrator (or main thread, manually) fires the ten specialists.
 2. **Before the second-pass closure (QA → Tech Lead → Product Designer).** Any `BLOCKER` or unwaived `MAJOR` returns the work to the Implementer.
-3. **On every PR, regardless of size.** Even a one-line change gets all nine — most will report `APPROVE` quickly with a brief `## Verified` list.
+3. **On every PR, regardless of size.** Even a one-line change gets all ten — most will report `APPROVE` quickly with a brief `## Verified` list.
 
 ## Anti-patterns this system exists to prevent
 
-These are the patterns one polite generalist tends to miss. If you find any of these slipping past the nine reviewers, the relevant reviewer's checklist needs tightening:
+These are the patterns one polite generalist tends to miss. If you find any of these slipping past the ten reviewers, the relevant reviewer's checklist needs tightening:
 
 - `validateAndPersist(x)` shipping to main. Should be caught by **reviewer-responsibility** and **reviewer-readability**.
 - A `useEffect` with 30 lines doing four things. Should be caught by **reviewer-complexity** and **reviewer-responsibility**.
@@ -143,8 +156,10 @@ These are the patterns one polite generalist tends to miss. If you find any of t
 
 ## Updating this system
 
-The reviewers are agent files at `.claude/agents/reviewer-*.md`. Edits to a reviewer's checklist take effect immediately on the next dispatch. The orchestrator is at `.claude/agents/code-reviewer.md`. This file (`CODE_REVIEW.md`) is the human-readable index.
+The reviewers are agent files at `.claude/agents/reviewer-*.md`. Edits to a reviewer's checklist take effect immediately on the next dispatch. The orchestrator is at `.claude/agents/code-reviewer.md`. The notes archive is at `docs/CODE_REVIEW_NOTES.md`. This file (`CODE_REVIEW.md`) is the human-readable index.
 
-Adding a tenth reviewer? Create `.claude/agents/reviewer-<name>.md`, follow the structure of the existing nine, and update both `code-reviewer.md` (orchestrator's list of nine, now ten) and this file (the table and the dispatch command).
+Adding an eleventh reviewer? Create `.claude/agents/reviewer-<name>.md`, follow the structure of the existing ten, and update both `code-reviewer.md` (orchestrator's list of ten, now eleven) and this file (the table and the dispatch command).
 
 Removing a reviewer? Deprecate by stripping its system prompt down to "this reviewer is retired; never invoke" — don't delete the file, so future audits of what we used to enforce remain readable. Then update both `code-reviewer.md` and this file.
+
+Recurring `MAJOR` findings (the same kind of issue appearing in 2+ unrelated PRs) should be promoted to a `P-NNN` precedent in `docs/CODE_REVIEW_NOTES.md`. The orchestrator proposes the promotion; the human ratifies it on next review.
