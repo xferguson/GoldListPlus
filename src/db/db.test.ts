@@ -3,6 +3,7 @@ import type { Table } from 'dexie';
 import { ulid } from 'ulid';
 import { db } from './db';
 import type { Book, Page, Card, ReviewEvent, Tier } from './db';
+import { MS_PER_DAY } from '../lib/time';
 
 /**
  * Proves a Dexie index actually filters rows (not merely that `.where()` resolves).
@@ -159,7 +160,7 @@ describe('db schema', () => {
         title: 'Bronze 1',
         tier: 'bronze',
         createdAt: 1_700_000_000_000,
-        reviewableAt: 1_700_000_000_000 + 14 * 86_400_000,
+        reviewableAt: 1_700_000_000_000 + 14 * MS_PER_DAY,
         cardIds: [],
       };
       await db.pages.put(page);
