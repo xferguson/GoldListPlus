@@ -5,6 +5,7 @@ import * as cards from '../../db/repos/cards';
 import { TierBadge } from '../../components/TierBadge';
 import { TierBorder } from '../../components/TierBorder';
 import { AddCardForm } from './AddCardForm';
+import { CardRow } from './CardRow';
 import type { Card, Page } from '../../db/db';
 
 const HEADLIST_WARNING_THRESHOLD = 26;
@@ -137,109 +138,4 @@ export function ListDetail() {
   );
 }
 
-type CardRowProps = {
-  card: Card;
-  locked: boolean;
-  onSave: (source: string, target: string) => Promise<void>;
-  onDelete: () => Promise<void>;
-};
-
-function CardRow({ card, locked, onSave, onDelete }: CardRowProps) {
-  const [editing, setEditing] = useState(false);
-  const [source, setSource] = useState(card.source);
-  const [target, setTarget] = useState(card.target);
-
-  function startEdit(): void {
-    setSource(card.source);
-    setTarget(card.target);
-    setEditing(true);
-  }
-
-  async function handleSave(): Promise<void> {
-    await onSave(source.trim(), target.trim());
-    setEditing(false);
-  }
-
-  function handleCancel(): void {
-    setSource(card.source);
-    setTarget(card.target);
-    setEditing(false);
-  }
-
-  const srcId = `card-edit-source-${card.id}`;
-  const tgtId = `card-edit-target-${card.id}`;
-
-  if (editing && !locked) {
-    return (
-      <li data-testid={`card-row-${card.id}`} className="rounded border border-neutral-700 p-2">
-        <div className="flex flex-col gap-2">
-          <label htmlFor={srcId}>Source</label>
-          <input
-            id={srcId}
-            value={source}
-            onChange={(e) => setSource(e.target.value)}
-            className="rounded border border-neutral-700 bg-neutral-900 px-2 py-1"
-          />
-          <label htmlFor={tgtId}>Target</label>
-          <input
-            id={tgtId}
-            value={target}
-            onChange={(e) => setTarget(e.target.value)}
-            className="rounded border border-neutral-700 bg-neutral-900 px-2 py-1"
-          />
-          <div className="flex gap-2">
-            <button
-              type="button"
-              onClick={() => {
-                void handleSave();
-              }}
-              className="rounded bg-amber-600 px-3 py-1 text-sm text-white"
-            >
-              Save
-            </button>
-            <button
-              type="button"
-              onClick={handleCancel}
-              className="rounded border border-neutral-600 px-3 py-1 text-sm"
-            >
-              Cancel
-            </button>
-          </div>
-        </div>
-      </li>
-    );
-  }
-
-  return (
-    <li data-testid={`card-row-${card.id}`} className="flex items-center gap-3 rounded border border-neutral-700 p-2">
-      <span>{card.source}</span>
-      <span className="text-neutral-500">/</span>
-      <span>{card.target}</span>
-      {!locked && (
-        <div className="ml-auto flex gap-2">
-          <button
-            type="button"
-            data-testid={`card-edit-${card.id}`}
-            aria-label="Edit card"
-            onClick={startEdit}
-            className="rounded border border-neutral-600 px-2 py-1 text-sm"
-          >
-            Edit
-          </button>
-          <button
-            type="button"
-            data-testid={`card-delete-${card.id}`}
-            aria-label="Delete card"
-            onClick={() => {
-              void onDelete();
-            }}
-            className="rounded border border-red-700 px-2 py-1 text-sm text-red-200"
-          >
-            Delete
-          </button>
-        </div>
-      )}
-    </li>
-  );
-}
 
