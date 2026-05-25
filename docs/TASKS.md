@@ -670,3 +670,170 @@
   2. Builds with Node 20 and `npm ci`.
   3. Uploads `dist/` via `actions/upload-pages-artifact` and deploys via `actions/deploy-pages`.
   4. Workflow passes on a clean clone.
+
+## Chores
+
+> **Origin:** 2026-05-25 baseline review (see `docs/CODE_REVIEW_NOTES.md` entry of the same date). The first run of the 10-reviewer orchestrator against the existing codebase produced 11 BLOCKERs across 5 specialists and ~45 MAJORs across all 10. The eight chores below clear every BLOCKER and a substantial chunk of MAJORs.
+>
+> **Recommended landing sequence:** `CHORE-002 → CHORE-001 → (CHORE-008, CHORE-004 in parallel) → CHORE-003 → (CHORE-005, CHORE-007 in parallel) → CHORE-006`.
+>
+> **Rationale:** CHORE-002 first so diagnostic visibility (ErrorBoundary + console.error + SW callbacks) is in place before any of the other refactors land — every subsequent chore benefits from real error surfaces if something regresses. CHORE-001 second because CHORE-005 and CHORE-007 import the new `MS_PER_DAY` constant. CHORE-003 before CHORE-006 to avoid rewriting the same route tests twice. CHORE-006 last to minimise rebase pain on `src/routes/ListDetail/index.tsx`.
+>
+> **Workflow note:** Each chore goes through the full subagent loop (product-designer where flagged → qa-engineer → implementer → code-reviewer → second-pass QA/tech-lead/product-designer) and lands on its own feature branch with its own PR. Chores are not bundled — the orchestrator's reviewer-scope agent will flag bundling.
+
+### CHORE-001: Extract `MS_PER_DAY` to `src/lib/time.ts`
+- [ ] Status
+- **Files touched:** new `src/lib/time.ts`, new `src/lib/time.test.ts`, `src/lib/distillation.ts` (remove `DAY_MS = 86_400_000` at line 11, import `MS_PER_DAY`), `src/routes/Book/index.tsx` (same), and 8 test files that inline the literal: `src/db/db.test.ts`, `src/db/repos/books.test.ts`, `src/db/repos/cards.test.ts`, `src/db/repos/pages.test.ts`, `src/routes/Book/Book.test.tsx`, `src/routes/ListDetail/ListDetail.test.tsx`, `src/routes/Settings/Settings.test.tsx`, `src/lib/sync/exportImport.test.ts`, `src/lib/distillation.test.ts`.
+- **Depends on:** none.
+- **Clears:** reviewer-readability BLOCKER (DAY_MS duplicated across files); reviewer-modularity MINOR (same).
+- **Product-designer needed:** no — pure refactor, no user-visible change.
+- **Acceptance criteria:**
+  1. `src/lib/time.ts` exists and exports `MS_PER_DAY = 86_400_000` as a named const with a one-line JSDoc.
+  2. `src/lib/time.test.ts` asserts `MS_PER_DAY === 86_400_000` (the named constant carries the contract; the test pins the value so changes are deliberate).
+  3. `grep -nE "(DAY_MS|86_?400_?000)\b" src/` returns zero hits outside `src/lib/time.ts` and `src/lib/time.test.ts`.
+  4. `src/lib/distillation.ts` and `src/routes/Book/index.tsx` import `MS_PER_DAY` from `src/lib/time`; their local `DAY_MS` declarations are removed.
+  5. All 8 test files use `MS_PER_DAY` for any 86_400_000 arithmetic.
+  6. `npm run test` / `typecheck` / `lint` all green; suite count unchanged or larger (the new `time.test.ts` adds at least 1 test).
+  7. **Mutation trap:** changing `MS_PER_DAY` to `86_400_001` causes ≥1 test failure in `distillation.test.ts` or `pages.test.ts` (proves the constant is load-bearing).
+- **Out of scope:**
+  - Introducing other time helpers (`daysFromNow`, `addDays`, formatting) — separate chore if needed.
+  - Amending ARCHITECTURE.md §2 module map to formally promote `src/lib/time.ts` (tech-lead can amend in a follow-up).
+  - Migrating `new Date(x)` call sites in `exportImport.ts` to a helper — separate concern.
+
+### CHORE-002: Production error visibility (ErrorBoundary + SW hooks + `catch {}` audit)
+- [ ] Status
+- **Files touched:** new `src/components/ErrorBoundary.tsx`, new `src/components/ErrorBoundary.test.tsx`, `src/routes/Layout.tsx` (mount `<ErrorBoundary/>` around `{children}`), `src/components/UpdatePrompt.tsx` (wire SW lifecycle callbacks), `src/components/UpdatePrompt.test.tsx` (assert callback wiring), `src/routes/Settings/index.tsx` (bind 3 `catch {}` blocks at lines 92-94, 116-118, 147-149; wrap `readFileText` at line 112), `src/routes/Settings/Settings.test.tsx` (failure-mode tests per Dexie error class), `src/routes/Book/NewBook.tsx` (bind 1 `catch {}` block at line 105-107), `src/routes/Book/NewBook.test.tsx` (failure-mode test).
+- **Depends on:** none. Ships first per the preamble.
+- **Clears:** reviewer-observability BLOCKERs ×3 (Settings catches discard error; readFileText outside try/catch; no ErrorBoundary); reviewer-error-handling BLOCKERs ×2 (bare catches discard cause; useEffect IIFEs swallow rejections — IIFE handling lands in this chore via the same audit); reviewer-error-handling/observability MAJORs ×many.
+- **Product-designer needed:** YES — light touch. Confirm: (a) per-Dexie-error-class user copy strings (`QuotaExceededError` → "Your device is out of storage."; `VersionError` → "Please reload to update."; `DataError`/`ConstraintError` → "The data couldn't be saved."; generic → existing copy); (b) ErrorBoundary fallback UI copy and reload-button label ("Something went wrong. Reload the app." with a "Reload" button).
+- **Acceptance criteria:**
+  1. New `ErrorBoundary` component catches a child-thrown error in a test (test renders `<ErrorBoundary><ThrowingChild/></ErrorBoundary>`), renders fallback UI containing a button with accessible name `"Reload"`, and calls `console.error('react: unhandled render error', expect.objectContaining({componentStack: expect.any(String)}), expect.any(Error))` exactly once.
+  2. `src/routes/Layout.tsx` wraps `{children}` in `<ErrorBoundary>`; asserted by a source-level test.
+  3. `UpdatePrompt.tsx`'s `useRegisterSW({...})` call passes `onRegisteredSW: (swUrl, r) => console.info('sw: registered', {swUrl, scope: r?.scope})`, `onRegisterError: (err) => console.error('sw: register failed', {}, err)`, `onOfflineReady: () => console.info('sw: offline ready')`, `onNeedRefresh: () => console.info('sw: update available')`. Tests mock the hook and capture each callback being defined (not undefined).
+  4. Each of the 4 production `catch (e)` blocks (NewBook submit, Settings export, Settings import-parse, Settings import-confirm) binds the error, calls `console.error('<operation> failed', {<context>}, e)` (operation-name prefix matches `newBook.create` / `settings.export` / `settings.import` / `settings.confirmImport`), and surfaces user copy that branches on Dexie error class.
+  5. Per-class user copy tested: 4 unit tests per error site (16 total), each mocking the underlying repo/parse call to reject with `new DOMException('msg', '<errorName>')` for each of `QuotaExceededError`, `VersionError`, `DataError`/`ConstraintError`, and an unrelated `Error`. Each test asserts the `setErrorText` argument differs across classes (no two classes produce identical user copy unless intentional and documented).
+  6. `readFileText(file)` call in `Settings.handleFileChange` is wrapped in try/catch; FileReader rejection produces `console.error('settings.import: file read failed', {fileName: file.name, fileSize: file.size}, err)` and user copy `"Could not read file."`.
+  7. `grep -E "catch\s*\{\s*$" src/ --include="*.ts" --include="*.tsx" -r` returns zero hits in non-test files (proves no bare `catch {}` remains in production source).
+  8. Settings `errorCopy` switch adds an exhaustive `default: const _x: never = error; throw new Error('unhandled error kind: ' + JSON.stringify(error))` (or equivalent never-check) — new unit test feeds a fabricated `{kind: 'made-up'} as never` and asserts the throw fires.
+  9. **Mutation trap:** removing the `<ErrorBoundary>` from `Layout.tsx` causes the ErrorBoundary integration test to fail (child throw escapes the boundary).
+- **Out of scope:**
+  - Structured logging library / log levels beyond `console.info`/`warn`/`error`.
+  - Persistent error reporting (no backend — PRD §8 rule 5).
+  - Per-route error boundaries beyond Layout.
+  - i18n of error copy (English only for v1).
+  - Refactoring `void asyncFn()` event-handler-from-button patterns in `ListDetail/Book/index.tsx` (the IIFE-loader audit covers `useEffect`; the per-click handler audit lands in CHORE-005 for ListDetail and CHORE-007 for Book).
+
+### CHORE-003: Replace `vi.mock('../../db/repos/*')` with fake-indexeddb in route tests
+- [ ] Status
+- **Files touched:** `src/routes/ListDetail/ListDetail.test.tsx` (delete `vi.mock` blocks at lines 21-65, rewrite seeding via real repos), `src/routes/Book/Book.test.tsx` (same), `src/routes/Book/NewBook.test.tsx` (same), `src/db/db.test.ts` (delete the P-001-violating empty-table describe at lines 62-130 — the `assertIndexFilters` block at `:200-376` already covers the same indexes).
+- **Depends on:** none.
+- **Clears:** reviewer-testability BLOCKERs ×3 (route tests mock entire Dexie repo layer; collaboration-shape assertions; P-001 violation in db.test.ts).
+- **Product-designer needed:** no — pure test refactor.
+- **Acceptance criteria:**
+  1. `grep -n "vi.mock.*db/repos" src/routes/` returns zero hits.
+  2. Every prior `expect(<repoMock>).toHaveBeenCalledWith(...)` assertion in the three route test files is replaced with an outcome read: `expect(await <repo>.<query>()).toEqual(...)` or `toMatchObject(...)`. `grep -n "toHaveBeenCalledWith.*expect.objectContaining" src/routes/{ListDetail,Book}/` returns zero hits except where the function under test is a prop callback the route passes (not a Dexie repo).
+  3. All three route test files use the close/delete/open dance from `src/db/repos/pages.test.ts:35-47` in `beforeEach` and `afterEach`.
+  4. `src/db/db.test.ts:62-130` empty-table describe block is deleted; the file's total test count drops by exactly 10 (the 10 empty-table assertions).
+  5. Total test count post-refactor is ≥ 515 (the current baseline; no coverage regression — the empty-table tests being deleted were shadowed by the filter block).
+  6. `npm run test` green; `typecheck` clean; `lint` clean.
+  7. **Mutation trap:** changing `pages.create` production body to `return undefined` causes ≥1 test to fail in EACH of the three refactored test files (proves the tests now observe outcomes, not just calls).
+- **Out of scope:**
+  - Extracting shared test fixtures to `src/test/fixtures.ts` (separate cleanup chore — surfaced by reviewer-complexity MINOR).
+  - Refactoring `UpdatePrompt.test.tsx`'s `vi.mock('virtual:pwa-register/react', ...)` — the virtual module mock is necessary in principle (per orchestrator's analysis).
+  - Adding any new test cases beyond what's needed to preserve coverage.
+
+### CHORE-004: Tighten `parseExport` to per-row schema validation
+- [ ] Status
+- **Files touched:** `src/lib/sync/exportImport.ts`, `src/lib/sync/exportImport.test.ts`, `src/routes/Settings/index.tsx` (new `ImportError.kind = 'malformed-row'` requires user copy), `src/routes/Settings/Settings.test.tsx`.
+- **Depends on:** none. Ships in parallel with CHORE-008.
+- **Clears:** reviewer-security MAJORs ×2 (per-row schema not validated; prototype-pollution-adjacent imports).
+- **Product-designer needed:** YES — light touch. Confirm user copy for the new `malformed-row` error: something like `"This backup has a malformed <table> at row <index>. Nothing was imported."` Confirm whether to expose `<table>` and `<index>` to the user, or use a generic `"This backup file is corrupted."`
+- **Acceptance criteria:**
+  1. `parseExport` (or a new sibling `validateRowShapes` it calls) rejects malformed rows with new `ImportError` variant `{kind: 'malformed-row', table: 'books' | 'pages' | 'cards' | 'reviews', index: number, reason: string}`.
+  2. Per-table allowlist of permitted keys; unknown keys are STRIPPED before write (proves `__proto__` / `constructor` / `prototype` cannot survive into Dexie). Test: import an envelope where `books[0]` has an extra `htmlNote: '<script>'` field; assert post-import row has no `htmlNote` key.
+  3. Per-field type checks per row: missing required keys, wrong type, enum membership for `tier` (`'bronze' | 'silver' | 'gold'`) and `rating` (`'easy' | 'moderate' | 'hard' | 'wrong'`), `Number.isFinite` on all numeric fields (`createdAt`, `reviewableAt` when non-null, `archivedAt` when present, `headlistSize`, `distillationIntervalDays`, etc.), `Array.isArray` on `cardIds` and `parentIds`.
+  4. `Book.id` / `Page.id` / `Card.id` containing `#`, `?`, or `/` rejected as malformed-row (prevents broken hash routes).
+  5. At least 12 new failing-input fixture tests in `exportImport.test.ts` (3 per table): missing-required-key, wrong-type, enum-violation. Each asserts `parseExport(input)` returns `{ok: false, error: {kind: 'malformed-row', table: '<expected>', index: <expected>, reason: '<non-empty>'}}`.
+  6. Round-trip test still passes: `parseExport(JSON.stringify(buildExportEnvelope(realRows)))` returns `{ok: true, envelope}` where `envelope` deep-equals input.
+  7. Settings UI surfaces the malformed-row copy and shows the `<table>`/`<index>` (or generic copy per product-designer decision); `sync-error` element renders with the new text; confirm modal does NOT appear; DB unchanged.
+  8. **Mutation trap:** changing `Number.isFinite(x)` to `typeof x === 'number'` in the per-row validator causes the `NaN`-injection test to fail (proves the validator rejects NaN, not just non-numbers).
+- **Out of scope:**
+  - Validating `Page.parentPageId` / `childPageId` / `Card.parentIds` (still ADR-017-excluded for v1).
+  - JSON schema library adoption (use hand-rolled validators per project's minimal-deps stance).
+  - Size cap on imported file (separate chore if needed — surfaced by reviewer-security MAJOR but not BLOCKER).
+  - Sanitising user-content fields (Card.source/target) — they pass through as opaque text and are React-escaped on render.
+
+### CHORE-005: Atomic 2-write `cards.appendToPage` / `cards.detachFromPage` repo functions
+- [ ] Status
+- **Files touched:** `src/db/repos/cards.ts` (add the two new functions), `src/db/repos/cards.test.ts` (rollback tests), `src/routes/ListDetail/index.tsx` (rewire `onAddSuccess` and `onDelete`), `src/routes/ListDetail/ListDetail.test.tsx` (rollback test from route layer), `docs/ARCHITECTURE.md` (amend ADR-016 to record IOU resolution).
+- **Depends on:** CHORE-001 (test math uses `MS_PER_DAY`), CHORE-003 (avoid stale `vi.mock` collaborators in `ListDetail.test.tsx`).
+- **Clears:** reviewer-error-handling BLOCKER (ListDetail 2-write handlers outside transaction); reviewer-responsibility MAJOR (`onAddSuccess`/`onDelete` bundle 4 things — wrap resolves it).
+- **Product-designer needed:** no — no user-visible behaviour change (success and failure paths look identical to the user; failure correctness improves).
+- **Acceptance criteria:**
+  1. `cards.appendToPage(pageId: string, card: Card): Promise<void>` runs a single `db.transaction('rw', [db.pages, db.cards], async () => {…})` performing `db.cards.add(card)` and `db.pages.update(pageId, {cardIds: [...prevCardIds, card.id]})`. Lock check (`assertPageUnlocked` equivalent) runs inside the same transaction.
+  2. `cards.detachFromPage(pageId: string, cardId: string): Promise<void>` runs a single `db.transaction('rw', [db.pages, db.cards], async () => {…})` performing `db.cards.delete(cardId)` and `db.pages.update(pageId, {cardIds: prevCardIds.filter(id => id !== cardId)})`. Lock check runs inside the same transaction.
+  3. ListDetail `onAddSuccess` calls `cards.appendToPage`; `onDelete` calls `cards.detachFromPage`. Legacy `await cards.create(...); await pages.update(...)` sequence is removed from the route.
+  4. Failure-mode test (repo layer): seed Page with one Card; spy on `db.pages.update` to reject; call `cards.appendToPage`; assert (a) the call rejects, (b) `await cards.toArray()` does NOT contain the new card (rollback), (c) `await pages.get(pageId)` has unchanged `cardIds`.
+  5. Failure-mode test (route layer): same setup via fake-indexeddb (post-CHORE-003); click Add; underlying `db.pages.update` rejects mid-tx; UI surfaces an error (per CHORE-002's binding); DB state is unchanged.
+  6. Lock-check still enforced: writing to a locked page rejects (existing tests at `cards.test.ts:137-188` continue to pass after the wrap).
+  7. `docs/ARCHITECTURE.md` ADR-016 amended with a "Resolved in CHORE-005 (PR #N)" note citing this chore.
+  8. **Mutation trap:** dropping the `db.pages.update` call from `appendToPage` (so only the card is written) causes the round-trip test to fail (`await pages.get(pageId).cardIds` would not contain the new id).
+- **Out of scope:**
+  - Moving `Page.cardIds` off the row entirely (PRD §8 rule 4 candidate; separate larger discussion).
+  - Wrapping the `onEditSave` flow in a transaction (current `cards.update` is single-table; no atomicity gap).
+  - Removing the `cards.create` / `cards.remove` exports (they may still be useful elsewhere; only remove if grep shows zero callers post-chore).
+
+### CHORE-006: Split `ListDetail/index.tsx` — extract `CardRow` into Display + Editor
+- [ ] Status
+- **Files touched:** `src/routes/ListDetail/index.tsx` (becomes route-only — strip `CardRow` declaration), new `src/routes/ListDetail/CardRow.tsx` (thin orchestrator owning `editing` state), new `src/routes/ListDetail/CardRowDisplay.tsx`, new `src/routes/ListDetail/CardRowEditor.tsx`, new test files for each new component, `src/routes/ListDetail/ListDetail.test.tsx` (split assertions across the new component boundaries).
+- **Depends on:** CHORE-003 (the fake-indexeddb refactor lands first to avoid re-doing it across the split).
+- **Clears:** reviewer-responsibility BLOCKER (two components in one file); reviewer-complexity MAJORs ×2 (CardRow 97-LOC fall-through render; file 245 LOC at the upper edge).
+- **Product-designer needed:** no — no user-visible behaviour change (refactor is behaviour-preserving; outcome tests are the spec).
+- **Acceptance criteria:**
+  1. `src/routes/ListDetail/CardRow.tsx` exists as a ≤30-LOC component that owns `editing: boolean` state and renders either `<CardRowDisplay/>` or `<CardRowEditor/>` based on it.
+  2. `src/routes/ListDetail/CardRowDisplay.tsx` accepts `{card, locked, onEditRequested, onDelete}` props; renders the read-only row with edit + delete affordances. No `useState` for editing.
+  3. `src/routes/ListDetail/CardRowEditor.tsx` accepts `{card, onSave, onCancel}` props; renders the form with Save + Cancel. Owns local `source`/`target` state.
+  4. `src/routes/ListDetail/index.tsx` no longer declares `CardRow` (or `CardRowDisplay`/`CardRowEditor`). Line count drops to ≤200 (currently 245).
+  5. Each new component has its own test file with at least 3 tests (render + happy-path interaction + edge case).
+  6. All prior ListDetail test cases continue to pass against the new structure (refactor is behaviour-preserving — outcome tests are the spec).
+  7. No `if (editing && !locked) return <30+lines>` branch in any single function (the mode-parameter anti-pattern is gone).
+  8. **Mutation trap:** swapping the conditional in `CardRow` (rendering `<CardRowDisplay/>` when `editing` is true) causes the existing ListDetail test "saving an edit persists the new values" to fail.
+- **Out of scope:**
+  - Changing the actual editing UX, focus management, keyboard shortcuts.
+  - Touching `AddCardForm.tsx`.
+  - Extracting useEscapeToClose hook from Modal (separate chore — surfaced by reviewer-responsibility MAJOR).
+
+### CHORE-007: Extract `buildBronzePage` pure factory to `src/lib`
+- [ ] Status
+- **Files touched:** `src/lib/distillation.ts` (add `buildBronzePage`), `src/lib/distillation.test.ts` (test the factory), `src/routes/Book/index.tsx` (rewire `onNewBronzeList` to compose factory + repo + navigate), `src/routes/Book/Book.test.tsx` (route test asserts factory inputs reach the persisted row).
+- **Depends on:** CHORE-001 (factory uses `MS_PER_DAY`), CHORE-003 (avoid stale `vi.mock` collaborators in `Book.test.tsx`).
+- **Clears:** reviewer-responsibility BLOCKER (Book.onNewBronzeList bundles 4 things including interval arithmetic); reviewer-testability MAJOR (interval logic duplicated between Book route and `finalizePage`).
+- **Product-designer needed:** no — no user-visible behaviour change.
+- **Acceptance criteria:**
+  1. New pure `buildBronzePage({bookId, settings, title, now}: {bookId: string, settings: BookSettings, title: string, now: number}): Page` exported from `src/lib/distillation.ts`. No `Date.now()` inside (accepts `now: number`). No `newId()` inside is acceptable if the function takes `id: string` instead; the chore implementer chooses the cleaner shape and the test pins it.
+  2. `Book.onNewBronzeList` becomes ≤10 LOC: derive title via `nextBronzeTitle`, call `buildBronzePage`, call `pages.create`, navigate.
+  3. The `now + intervalDays * MS_PER_DAY` arithmetic appears in `buildBronzePage` only — not in `Book/index.tsx`, not duplicated with `finalizePage`'s child-Page math (verify via grep that the literal expression appears at most twice in `src/`: once in `buildBronzePage`, optionally once in `finalizePage`).
+  4. Factory tests pin: `reviewableAt = now + settings.distillationIntervalDays * MS_PER_DAY`, `tier === 'bronze'`, `archivedAt === undefined`, `parentPageId === undefined`, `childPageId === undefined`, `cardIds === []`, `lastNotifiedAt === undefined`, `createdAt === now`, `bookId === <input>`, `title === <input>`.
+  5. Route test (post-CHORE-003 fake-indexeddb): click "New Bronze List"; assert the row in `await pages.toArray()` matches the factory's output exactly (no fields drift between the factory and the persisted row).
+  6. **Mutation trap:** changing `now + intervalDays * MS_PER_DAY` to `now - intervalDays * MS_PER_DAY` in the factory causes the factory tests to fail (negative reviewableAt).
+  7. **Mutation trap 2:** changing `tier` to `'silver'` in the factory causes the factory tests to fail (bronze invariant).
+- **Out of scope:**
+  - Consolidating with `finalizePage`'s child-Page construction (could be a second factor — defer).
+  - Replacing inline `Date.now()` at the Book route's call site with injection (route is allowed to call `Date.now()` per §3.6).
+
+### CHORE-008: Fix lowercase tier token in `Page.title` from `finalizePage`
+- [ ] Status
+- **Files touched:** `src/lib/distillation.ts` (line 88), `src/lib/distillation.test.ts` (add assertion).
+- **Depends on:** none. Ships in parallel with CHORE-004.
+- **Clears:** reviewer-readability BLOCKER (lowercase tier token in user-facing Page.title).
+- **Product-designer needed:** YES — light touch. Confirm: (a) capitalized format `"Silver from Bronze 1"` is what we want, and NOT `"Silver 1"` (the Builder-computed format from TASK-014's non-blocking observation); (b) Gold child should be `"Gold from Bronze 3"` or similar — confirm exact wording. If product-designer chooses the Builder format, this chore shrinks to a pure casing fix in the interim and the format change becomes a TASK-014 concern.
+- **Acceptance criteria:**
+  1. `finalizePage(...).childPage.title` returns `` `${tierLabel(childTier)} from ${parent.title}` `` — `tierLabel` already exists at `src/lib/tiers.ts:14` and returns `"Bronze"`/`"Silver"`/`"Gold"`.
+  2. New test: a Silver child of a `"Bronze 1"` parent has `childPage.title === "Silver from Bronze 1"` (NOT `"silver from Bronze 1"`).
+  3. New test: a Gold child of a `"Bronze 3"` parent has `childPage.title === "Gold from Bronze 3"` (or product-designer-chosen wording).
+  4. `grep -n "childTier" src/lib/distillation.ts` shows `childTier` interpolated only via `tierLabel(...)` — never directly as a label.
+  5. **Mutation trap:** reverting to `` `${childTier} from ${parent.title}` `` (lowercase tier token) causes the assertion at AC-2 to fail.
+- **Out of scope:**
+  - Changing the broader Builder/Silver-numbering convention (TASK-014 concern).
+  - Rewriting historical `Page.title` values in users' databases (no migration — only newly-finalized pages get the new title).
+  - Localising "from" or the tier labels.
