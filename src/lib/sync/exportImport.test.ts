@@ -17,6 +17,7 @@ import * as reviews from '../../db/repos/reviews';
 // in the pure lib. The import below pins the API shape: if the implementer
 // chooses a different name the import fails at module load (Red).
 import { runImportTransaction } from '../../routes/Settings/syncActions';
+import { MS_PER_DAY } from '../time';
 
 // Source-purity scan idiom — mirrors TASK-006 / TASK-009. Per ADR-017 the
 // pure lib has no Dexie/React/Date.now/window refs.
@@ -37,7 +38,7 @@ const makeBook = (o: Partial<Book> = {}): Book => ({
 const makePage = (o: Partial<Page> = {}): Page => ({
   id: ulid(), bookId: ulid(), title: 'Bronze 1', tier: 'bronze',
   createdAt: 1_700_000_000_000,
-  reviewableAt: 1_700_000_000_000 + 14 * 86_400_000, cardIds: [], ...o,
+  reviewableAt: 1_700_000_000_000 + 14 * MS_PER_DAY, cardIds: [], ...o,
 });
 const makeCard = (o: Partial<Card> = {}): Card => ({
   id: ulid(), bookId: ulid(), pageId: ulid(),

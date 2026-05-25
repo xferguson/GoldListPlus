@@ -3,6 +3,7 @@ import { ulid } from 'ulid';
 import { db } from '../db';
 import type { Card, Page } from '../db';
 import * as cards from './cards';
+import { MS_PER_DAY } from '../../lib/time';
 
 // --- Factories ----------------------------------------------------------------
 
@@ -13,7 +14,7 @@ function makePage(overrides: Partial<Page> = {}): Page {
     title: 'Bronze 1',
     tier: 'bronze',
     createdAt: 1_700_000_000_000,
-    reviewableAt: 1_700_000_000_000 + 14 * 86_400_000,
+    reviewableAt: 1_700_000_000_000 + 14 * MS_PER_DAY,
     cardIds: [],
     ...overrides,
   };
