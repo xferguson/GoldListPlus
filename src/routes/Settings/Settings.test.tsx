@@ -354,6 +354,99 @@ describe('TASK-018 AC-13: parse / validation failures render locked copy with no
   );
 });
 
+// --- CHORE-004 AC-7: malformed-row UI surface ------------------------------
+
+describe('CHORE-004 AC-7: malformed-row import surfaces locked copy, no modal, no DB writes', () => {
+  // MUTATION: implementer hooks the new `malformed-row` kind into a generic
+  // "Import failed." catch-all instead of the per-table user copy. The exact
+  // textContent assertion below pins the PRD §5.10 wording.
+  it('CHORE-004: malformed books[2] (missing name) → sync-error reads exact PRD copy, no confirm modal, DB untouched', async () => {
+    renderAtSettings();
+
+    // Two valid books then a third missing `name` — 1-based index = 3.
+    const goodA = makeBook({ id: 'B-A', name: 'Japanese' });
+    const goodB = makeBook({ id: 'B-B', name: 'French' });
+    const badC: Record<string, unknown> = {
+      id: 'B-C',
+      // name: deliberately omitted
+      sourceLang: 'en', targetLang: 'de',
+      settings: { ...DEFAULT_SETTINGS }, createdAt: 1_700_000_000_000,
+    };
+    const malformedFile = JSON.stringify({
+      version: 1, exportedAt: 1_700_000_000_000,
+      books: [goodA, goodB, badC],
+      pages: [], cards: [], reviews: [],
+    });
+
+    pickFile(malformedFile);
+
+    const errEl = await screen.findByTestId('sync-error');
+    expect(errEl.textContent).toBe(
+      'This backup has a malformed book at row 3. Nothing was imported.',
+    );
+    expect(errEl.getAttribute('role')).toBe('alert');
+    // No confirm modal — validation aborts before the user sees the dialog.
+    expect(screen.queryByRole('dialog', { name: /confirm import/i })).not.toBeInTheDocument();
+    // DB unchanged (mirror the FK-error pattern at line 150-153).
+    expect(await db.books.toArray()).toEqual([]);
+    expect(await db.pages.toArray()).toEqual([]);
+    expect(await db.cards.toArray()).toEqual([]);
+    expect(await db.reviews.toArray()).toEqual([]);
+  });
+
+  // MUTATION: implementer wires the table label into the wrong slot — e.g.
+  // shows "malformed book" for every table. The matrix locks the per-table
+  // copy so a single typo fails one row, not all four.
+  it.each<[string, string, string]>([
+    [
+      'pages → "malformed list"',
+      JSON.stringify({
+        version: 1, exportedAt: 1_700_000_000_000,
+        books: [], pages: [{
+          id: 'P1', title: 'orphan', tier: 'bronze',
+          createdAt: 1, reviewableAt: 1, cardIds: [],
+          // bookId deliberately omitted
+        }], cards: [], reviews: [],
+      }),
+      'This backup has a malformed list at row 1. Nothing was imported.',
+    ],
+    [
+      'cards → "malformed card"',
+      JSON.stringify({
+        version: 1, exportedAt: 1_700_000_000_000,
+        books: [], pages: [], cards: [{
+          id: 'C1', bookId: 'B1',
+          // pageId deliberately omitted
+          source: 'hola', target: 'hello', createdAt: 1,
+        }], reviews: [],
+      }),
+      'This backup has a malformed card at row 1. Nothing was imported.',
+    ],
+    [
+      'reviews → "malformed review"',
+      JSON.stringify({
+        version: 1, exportedAt: 1_700_000_000_000,
+        books: [], pages: [], cards: [], reviews: [{
+          id: 'R1', pageId: 'P1', rating: 'easy', reviewedAt: 1,
+          // cardId deliberately omitted
+        }],
+      }),
+      'This backup has a malformed review at row 1. Nothing was imported.',
+    ],
+  ])('CHORE-004: %s renders exact PRD copy', async (_label, content, expectedCopy) => {
+    renderAtSettings();
+    pickFile(content);
+
+    const errEl = await screen.findByTestId('sync-error');
+    expect(errEl.textContent).toBe(expectedCopy);
+    expect(screen.queryByRole('dialog', { name: /confirm import/i })).not.toBeInTheDocument();
+    expect(await db.books.toArray()).toEqual([]);
+    expect(await db.pages.toArray()).toEqual([]);
+    expect(await db.cards.toArray()).toEqual([]);
+    expect(await db.reviews.toArray()).toEqual([]);
+  });
+});
+
 // --- DOM contracts (section heading, helper copy, buttons, hidden input) ---
 
 describe('TASK-018: Settings route exposes the Backup & restore section', () => {
