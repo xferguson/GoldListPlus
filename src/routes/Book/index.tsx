@@ -7,8 +7,7 @@ import { nextBronzeTitle } from '../../lib/bronzeTitle';
 import { TierBadge } from '../../components/TierBadge';
 import { TierBorder } from '../../components/TierBorder';
 import type { Book as BookType, Page } from '../../db/db';
-
-const DAY_MS = 86_400_000;
+import { MS_PER_DAY } from '../../lib/time';
 
 export function Book() {
   const { bookId } = useParams<{ bookId: string }>();
@@ -48,7 +47,7 @@ export function Book() {
       title,
       tier: 'bronze',
       createdAt: now,
-      reviewableAt: now + book.settings.distillationIntervalDays * DAY_MS,
+      reviewableAt: now + book.settings.distillationIntervalDays * MS_PER_DAY,
       cardIds: [],
     };
     await pages.create(newPage);

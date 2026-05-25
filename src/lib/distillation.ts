@@ -7,8 +7,7 @@ import type {
 } from '../db/db';
 import { newId } from '../db/ids';
 import { nextTier } from './tiers';
-
-const DAY_MS = 86_400_000;
+import { MS_PER_DAY } from './time';
 
 export type BuilderEntry = {
   source: string;
@@ -88,7 +87,7 @@ export function finalizePage(args: {
     title: `${childTier} from ${parent.title}`,
     tier: childTier,
     createdAt: now,
-    reviewableAt: childTier === 'gold' ? null : now + intervalDays * DAY_MS,
+    reviewableAt: childTier === 'gold' ? null : now + intervalDays * MS_PER_DAY,
     cardIds: newCards.map((c) => c.id),
     parentPageId: parent.id,
   };

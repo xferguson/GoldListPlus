@@ -13,11 +13,11 @@ import type {
   Rating,
   ReviewEvent,
 } from '../db/db';
+import { MS_PER_DAY } from './time';
 
 // ---------- fixtures ----------------------------------------------------------
 
 const NOW = 1_700_000_000_000;
-const DAY_MS = 86_400_000;
 
 function settings(
   autoDropOnEasy: boolean,
@@ -39,7 +39,7 @@ function makePage(overrides: Partial<Page> = {}): Page {
     bookId: 'book-1',
     title: 'Bronze 1',
     tier: 'bronze',
-    createdAt: NOW - 14 * DAY_MS,
+    createdAt: NOW - 14 * MS_PER_DAY,
     reviewableAt: NOW,
     cardIds: ['c1', 'c2', 'c3'],
     ...overrides,
@@ -53,7 +53,7 @@ function makeCard(overrides: Partial<Card> = {}): Card {
     pageId: 'parent-page',
     source: 'hola',
     target: 'hello',
-    createdAt: NOW - 14 * DAY_MS,
+    createdAt: NOW - 14 * MS_PER_DAY,
     ...overrides,
   };
 }
@@ -294,8 +294,11 @@ describe('TASK-004 AC-5: finalizePage — bronze → silver happy path', () => {
     expect(plan.childPage.tier).toBe('silver');
   });
 
-  it('TASK-004 AC-5: childPage.reviewableAt === now + intervalDays * 86_400_000', () => {
-    expect(plan.childPage.reviewableAt).toBe(NOW + intervalDays * DAY_MS);
+  it('TASK-004 AC-5: childPage.reviewableAt === now + intervalDays * MS_PER_DAY', () => {
+    expect(plan.childPage.reviewableAt).toBe(NOW + intervalDays * MS_PER_DAY);
+    // CHORE-001 AC-7 mutation trap: literal RHS (no MS_PER_DAY symbol) so
+    // mutating MS_PER_DAY in src/lib/time.ts surfaces as a numeric mismatch.
+    expect(plan.childPage.reviewableAt).toBe(1_701_209_600_000);
   });
 
   it('TASK-004 AC-5: childPage.parentPageId === parent.id', () => {

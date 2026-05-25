@@ -7,6 +7,7 @@ import { tierVisual } from '../../lib/tiers';
 import type { Book as BookType, Page } from '../../db/db';
 import * as books from '../../db/repos/books';
 import * as pages from '../../db/repos/pages';
+import { MS_PER_DAY } from '../../lib/time';
 
 // ---------------------------------------------------------------------------
 // Mock the two repos the Book route reads. vi.mock is hoisted, so the path
@@ -59,7 +60,7 @@ function makePage(overrides: Partial<Page>): Page {
     title: 'Bronze 1',
     tier: 'bronze',
     createdAt: 1_700_000_000_000,
-    reviewableAt: 1_700_000_000_000 + 14 * 86_400_000,
+    reviewableAt: 1_700_000_000_000 + 14 * MS_PER_DAY,
     cardIds: [],
     ...overrides,
   };
@@ -201,9 +202,9 @@ describe('TASK-011 AC-3: per-Book overview — New-Bronze-List affordance', () =
     expect(arg!.createdAt).toBeGreaterThan(0);
   });
 
-  it('AC-3b: reviewableAt === createdAt + distillationIntervalDays*86_400_000 — with 7-day fixture (kills hardcoded 14)', async () => {
+  it('AC-3b: reviewableAt === createdAt + distillationIntervalDays*MS_PER_DAY — with 7-day fixture (kills hardcoded 14)', async () => {
     // The single most discriminating assertion in this file. A 14-day default
-    // hardcode would yield reviewableAt - createdAt = 14*86_400_000; we set
+    // hardcode would yield reviewableAt - createdAt = 14*MS_PER_DAY; we set
     // the fixture to 7 days so a regression that ignored book.settings and
     // hardcoded 14 would fail this exact equality.
     vi.mocked(books.get).mockResolvedValue(
@@ -225,7 +226,7 @@ describe('TASK-011 AC-3: per-Book overview — New-Bronze-List affordance', () =
     expect(arg).toBeDefined();
     expect(arg!.reviewableAt).not.toBeNull();
     // Computed equality. Sentinel — discriminates 7 from 14.
-    expect((arg!.reviewableAt as number) - arg!.createdAt).toBe(7 * 86_400_000);
+    expect((arg!.reviewableAt as number) - arg!.createdAt).toBe(7 * MS_PER_DAY);
   });
 
   it('AC-3b: reviewedAt === undefined on creation', async () => {
