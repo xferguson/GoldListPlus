@@ -72,6 +72,34 @@ Lessons that apply across all future PRs, surfaced from individual review entrie
 
 > Newest first. Append, never edit historical entries — corrections go in a new entry referencing the old.
 
+### 2026-05-25 — baseline — `claude/gracious-knuth-665964` — first run of the 10-reviewer orchestrator against existing codebase
+
+**Scope:** Baseline review of the whole codebase at HEAD `be0c896` (no PR diff). First exercise of the 10-specialist orchestrator + consolidator pipeline introduced in PR #14. All ten reviewers fired in parallel against the entire `src/` tree (~53 production files, ~3490 LOC non-test) and `docs/`.
+**Verdict:** REQUEST_CHANGES (consolidated). The full consolidated report lives in the conversation transcript that produced this run; copying it verbatim would exceed the archive's signal/noise budget.
+**Specialists:** all 10 filed findings. 9 returned `REQUEST_CHANGES` (every specialist except none-clean); `reviewer-generic` was the most lenient (1 MAJOR, 1 MINOR).
+
+**Headline counts:**
+- **11 BLOCKERs** across 5 specialists: reviewer-readability (2), reviewer-responsibility (3), reviewer-error-handling (3), reviewer-observability (3), reviewer-testability (3). One BLOCKER (`ListDetail` add/delete outside transaction) was filed by both error-handling and responsibility from different angles — reinforcement, not contradiction. One BLOCKER cluster (route tests mocking Dexie repos) recurs across 3 test files, instantiating a candidate new precedent.
+- **~45 MAJORs** across all 10 specialists, concentrated in: `ListDetail/index.tsx` (CardRow + 2-write handlers), `Settings/index.tsx` + `syncActions.ts` (4-phase orchestrator, generic 'Import failed' copy, layering violation, prototype-pollution-adjacent imports), `NewBook.tsx` (copy-pasted input blocks, abbreviated locals), `parseExport` (envelope-shape-only validation — malicious backup writes directly to Dexie).
+- **~15 MINORs / ~5 NITs** — author's discretion.
+
+**Top findings (severity-ordered, deduped across specialists):**
+- [BLOCKER] reviewer-testability — `ListDetail.test.tsx` / `Book.test.tsx` / `NewBook.test.tsx` mock entire Dexie repo layer via `vi.mock`. §8 dependency-ledger explicitly forbids; tests pass with stubbed no-ops. **Recurs across 3 files** — candidate precedent.
+- [BLOCKER] reviewer-error-handling + reviewer-responsibility — `ListDetail/index.tsx:50-66` `onAddSuccess`/`onDelete` perform 2 Dexie writes outside transaction; partial failure leaves orphan/stale state. Filed from both error-handling and responsibility angles.
+- [BLOCKER] reviewer-readability — `src/lib/distillation.ts:88` user-facing `Page.title` interpolates lowercase tier token; should use `tierLabel(childTier)`.
+- [BLOCKER] reviewer-readability + reviewer-modularity — `DAY_MS = 86_400_000` declared in 2 production files + 8 test files; `src/lib/time.ts` pre-allocated in §2 module map but never created.
+- [BLOCKER] reviewer-observability + reviewer-error-handling — 4 production `catch {}` bind nothing and log nothing; no React `ErrorBoundary` anywhere; `useRegisterSW({})` has no callbacks wired.
+- [BLOCKER] reviewer-modularity — `Settings/syncActions.ts` imports `db` directly from UI/route layer. ADR-017 permits a transactional access point but its stated preference is per-repo `listAll()`; impl shipped the carve-out without the preferred form.
+- [BLOCKER] reviewer-responsibility — `ListDetail/index.tsx` declares two components (`ListDetail` route + `CardRow`) in one file; `Book/index.tsx:onNewBronzeList` bundles 4 responsibilities including interval arithmetic that belongs in `src/lib/distillation.ts`.
+- [BLOCKER] reviewer-generic — suite/typecheck/lint all green; PRD §8 sacred rules all hold; data-model invariants intact; SW scope correct. **The only generic BLOCKER class did not fire** — this is the cleanest specialist verdict, which itself is information: the codebase is well-organised at the macro level; rot is concentrated in handler-layer hygiene.
+
+**Precedent / lesson:**
+The very first 10-reviewer run produced 11 BLOCKERs and ~45 MAJORs against a codebase that the previous single-generalist reviewer had passed across 13 PRs. This validates the defence-in-depth thesis: ten strict single-principle reviewers DO find things one polite generalist does not. The findings cluster predictably — `ListDetail`/`Settings` handler layer (where IO meets UI), test hygiene (where the `vi.mock` shortcut is most tempting), and project-rule drift (the `DAY_MS`-everywhere literal, the `Page.title` lowercase tier token). None of these are catastrophic on their own; collectively they represent a meaningful hygiene gap that a single-pass review missed. **The `vi.mock('../../db/repos/*')` pattern recurring across 3 route-test files is a strong candidate for promotion to a new `P-NNN` precedent** ("route tests must use fake-indexeddb, not mocked repos") — flag for promotion if it appears in one more PR. The `bare catch {}` pattern (4 sites, 2 specialists filing) is similarly recurring and should be elevated if seen again.
+
+**Waivers:** none — this is a baseline diagnostic, not a merge-gate review. The findings here are intended to seed follow-up TASKS, not to block a specific PR. The tech-lead should slice these into `chore:` tasks (suggested: chore-001 `extract DAY_MS to src/lib/time.ts`; chore-002 `add ErrorBoundary + log to UpdatePrompt SW callbacks`; chore-003 `replace vi.mock repo stubs with fake-indexeddb in route tests`; chore-004 `tighten parseExport to per-row schema validation`; chore-005 `wrap ListDetail 2-write handlers in db.transaction`).
+
+**Full detail:** consolidated report in the conversation transcript that produced this baseline run (not copied here per archive policy — it runs ~400 lines including the 10 raw specialist reports verbatim).
+
 ### 2026-05-25 — PR #14 — `chore/code-review-subagents` — establish 10 parallel reviewers + notes archive
 
 **Scope:** Introduce 9 single-principle reviewer subagents + 1 reviewer-generic, an orchestrator that dispatches all 10 in parallel, a CODE_REVIEW.md workflow document, and this code-review-notes archive.
