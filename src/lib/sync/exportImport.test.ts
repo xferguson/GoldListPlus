@@ -513,6 +513,385 @@ describe('TASK-018 AC-10: import transaction rolls back atomically on mid-write 
   });
 });
 
+// --- CHORE-004: per-row schema validation (malformed-row variant) -----------
+
+// Narrow shape for the new ImportError variant. We cannot widen the union in
+// exportImport.ts (implementer's job), so use `as` casts at assertion sites.
+type MalformedRow = {
+  kind: 'malformed-row';
+  table: 'books' | 'pages' | 'cards' | 'reviews';
+  index: number;
+  reason: string;
+};
+
+function expectMalformedRow(
+  result: ReturnType<typeof parseExport>,
+  expectedTable: MalformedRow['table'],
+  expectedIndex: number,
+): void {
+  expect(result.ok).toBe(false);
+  if (result.ok) throw new Error('parseExport unexpectedly returned ok:true');
+  const err = result.error as unknown as MalformedRow;
+  expect(err.kind).toBe('malformed-row');
+  expect(err.table).toBe(expectedTable);
+  expect(err.index).toBe(expectedIndex);
+  expect(typeof err.reason).toBe('string');
+  expect(err.reason.length).toBeGreaterThan(0);
+}
+
+// Build an envelope with the named slot replaced by an arbitrary (possibly
+// malformed) row.  We intentionally type the rows as `unknown` so we can
+// inject defects without TypeScript blocking us.
+type EnvelopeLike = {
+  version: 1; exportedAt: number;
+  books: unknown[]; pages: unknown[]; cards: unknown[]; reviews: unknown[];
+};
+function envWith(parts: Partial<EnvelopeLike>): EnvelopeLike {
+  return {
+    version: 1, exportedAt: 1_700_000_000_000,
+    books: parts.books ?? [],
+    pages: parts.pages ?? [],
+    cards: parts.cards ?? [],
+    reviews: parts.reviews ?? [],
+  };
+}
+
+describe('CHORE-004 AC-3: malformed-row — books table', () => {
+  // MUTATION: implementer skips name validation entirely → unknown row passes.
+  // The reason-non-empty assertion in expectMalformedRow catches the variant
+  // omission.
+  it('CHORE-004: books[0] missing `name` → malformed-row table=books index=1', () => {
+    const badBook = {
+      id: 'B1', sourceLang: 'en', targetLang: 'ja',
+      settings: { ...DEFAULT_SETTINGS }, createdAt: 1_700_000_000_000,
+    };
+    const result = parseExport(envWith({ books: [badBook] }));
+    expectMalformedRow(result, 'books', 1);
+  });
+
+  // MUTATION: implementer accepts any non-undefined `name` (number works).
+  // Forces `typeof === 'string'` check.
+  it('CHORE-004: books[0] `name` not a string → malformed-row table=books index=1', () => {
+    const badBook = {
+      ...makeBook({ id: 'B1' }),
+      name: 42 as unknown as string,
+    };
+    const result = parseExport(envWith({ books: [badBook] }));
+    expectMalformedRow(result, 'books', 1);
+  });
+
+  // MUTATION: implementer uses `typeof headlistSize === 'number'` instead of
+  // `Number.isFinite(headlistSize)`. NaN slips through. AC-8 trap.
+  it('CHORE-004: books[0] settings.headlistSize is NaN → malformed-row table=books index=1', () => {
+    const badBook = {
+      ...makeBook({ id: 'B1' }),
+      settings: { ...DEFAULT_SETTINGS, headlistSize: NaN },
+    };
+    const result = parseExport(envWith({ books: [badBook] }));
+    // AC-8 mutation trap: typeof === 'number' would let NaN through; Number.isFinite catches it.
+    expectMalformedRow(result, 'books', 1);
+  });
+});
+
+describe('CHORE-004 AC-3: malformed-row — pages table', () => {
+  // MUTATION: implementer drops the `bookId` required check.
+  it('CHORE-004: pages[0] missing `bookId` → malformed-row table=pages index=1', () => {
+    const badPage = {
+      id: 'P1', title: 'Bronze 1', tier: 'bronze',
+      createdAt: 1_700_000_000_000,
+      reviewableAt: 1_700_000_000_000 + 14 * 86_400_000, cardIds: [],
+    };
+    const result = parseExport(envWith({ pages: [badPage] }));
+    expectMalformedRow(result, 'pages', 1);
+  });
+
+  // MUTATION: implementer treats `tier` as an opaque string. A typo like
+  // "platinum" survives and breaks tier-driven UI logic downstream.
+  it('CHORE-004: pages[0] `tier` outside enum ("platinum") → malformed-row', () => {
+    const badPage = { ...makePage({ id: 'P1', bookId: 'B1' }), tier: 'platinum' as unknown as 'bronze' };
+    const result = parseExport(envWith({ pages: [badPage] }));
+    expectMalformedRow(result, 'pages', 1);
+  });
+
+  // MUTATION: implementer uses `typeof reviewableAt === 'number' || reviewableAt === null`
+  // — NaN is a number, so it sneaks past. Number.isFinite catches it.
+  // Note: null IS valid (Gold tier). NaN is not.
+  it('CHORE-004: pages[0] `reviewableAt` is NaN → malformed-row (null is permitted; NaN is not)', () => {
+    const badPage = { ...makePage({ id: 'P1', bookId: 'B1' }), reviewableAt: NaN as unknown as number };
+    const result = parseExport(envWith({ pages: [badPage] }));
+    // AC-8 mutation trap: typeof === 'number' would let NaN through; Number.isFinite catches it.
+    expectMalformedRow(result, 'pages', 1);
+  });
+
+  // Build an own-key __proto__ element for the cardIds array — see comment on
+  // the cards parentIds case below for the rationale.
+  function ownProtoElement(): unknown {
+    const o: Record<string, unknown> = {};
+    Object.defineProperty(o, '__proto__', {
+      value: { polluted: true },
+      enumerable: true, writable: true, configurable: true,
+    });
+    return o;
+  }
+
+  // CHORE-004 review-kickback Finding A (security MAJOR): Array.isArray alone
+  // is not enough — each element of `cardIds` must be a non-empty string.
+  // Otherwise an attacker can inject numbers, nulls, empty strings, or
+  // prototype-pollution-adjacent objects via the array.
+  it.each<[string, unknown]>([
+    ['number element [123]', [123]],
+    ['empty-string element [""]', ['']],
+    ['null element [null]', [null]],
+    ['plain-object element [{}]', [{}]],
+    ['__proto__-own-key element', [ownProtoElement()]],
+    ['mixed valid + bad ["ok", 42]', ['ok', 42]],
+  ])(
+    'CHORE-004 Finding A: pages[0] cardIds containing %s → malformed-row table=pages index=1',
+    (_label, cardIds) => {
+      // MUTATION: Array.isArray alone (no element check) would accept this and
+      // let unsafe values through.
+      const badPage = {
+        ...makePage({ id: 'P1', bookId: 'B1' }),
+        cardIds: cardIds as unknown as string[],
+      };
+      const result = parseExport(envWith({ pages: [badPage] }));
+      expectMalformedRow(result, 'pages', 1);
+    },
+  );
+});
+
+describe('CHORE-004 AC-3: malformed-row — cards table', () => {
+  // MUTATION: implementer forgets to validate `pageId` (only validates `bookId`).
+  it('CHORE-004: cards[0] missing `pageId` → malformed-row table=cards index=1', () => {
+    const badCard = {
+      id: 'C1', bookId: 'B1', source: 'hola', target: 'hello',
+      createdAt: 1_700_000_000_000,
+    };
+    const result = parseExport(envWith({ cards: [badCard] }));
+    expectMalformedRow(result, 'cards', 1);
+  });
+
+  // MUTATION: implementer accepts any non-undefined `source` (number works).
+  it('CHORE-004: cards[0] `source` not a string → malformed-row table=cards index=1', () => {
+    const badCard = { ...makeCard({ id: 'C1', bookId: 'B1', pageId: 'P1' }), source: 99 as unknown as string };
+    const result = parseExport(envWith({ cards: [badCard] }));
+    expectMalformedRow(result, 'cards', 1);
+  });
+
+  // MUTATION: implementer uses `parentIds == null || typeof parentIds === 'object'`
+  // — a string is an object-like, but Array.isArray would reject it.
+  it('CHORE-004: cards[0] `parentIds` is a string, not an array → malformed-row', () => {
+    const badCard = { ...makeCard({ id: 'C1', bookId: 'B1', pageId: 'P1' }), parentIds: 'abc' as unknown as string[] };
+    const result = parseExport(envWith({ cards: [badCard] }));
+    expectMalformedRow(result, 'cards', 1);
+  });
+
+  // CHORE-004 review-kickback Finding A (security MAJOR): Array.isArray alone
+  // is not enough — each element of `parentIds` must be a non-empty string.
+  // Mirror the cardIds matrix; assignment to `__proto__` would set the prototype
+  // (not an own key), so we use defineProperty to create an own enumerable
+  // __proto__ element — the actual prototype-pollution-adjacent vector.
+  it.each<[string, unknown]>([
+    ['number element [42]', [42]],
+    ['null element [null]', [null]],
+    ['empty-string element [""]', ['']],
+    ['mixed valid + bad ["ok", 7]', ['ok', 7]],
+    ['__proto__-own-key element', (() => {
+      const o: Record<string, unknown> = {};
+      Object.defineProperty(o, '__proto__', {
+        value: { polluted: true },
+        enumerable: true, writable: true, configurable: true,
+      });
+      return [o];
+    })()],
+  ])(
+    'CHORE-004 Finding A: cards[0] parentIds containing %s → malformed-row table=cards index=1',
+    (_label, parentIds) => {
+      // MUTATION: Array.isArray alone (no element check) would accept this and
+      // let unsafe values through.
+      const badCard = {
+        ...makeCard({ id: 'C1', bookId: 'B1', pageId: 'P1' }),
+        parentIds: parentIds as unknown as string[],
+      };
+      const result = parseExport(envWith({ cards: [badCard] }));
+      expectMalformedRow(result, 'cards', 1);
+    },
+  );
+});
+
+describe('CHORE-004 AC-3: malformed-row — reviews table', () => {
+  // MUTATION: implementer skips the cardId required-key check.
+  it('CHORE-004: reviews[0] missing `cardId` → malformed-row table=reviews index=1', () => {
+    const badReview = {
+      id: 'R1', pageId: 'P1', rating: 'easy', reviewedAt: 1_700_000_000_000,
+    };
+    const result = parseExport(envWith({ reviews: [badReview] }));
+    expectMalformedRow(result, 'reviews', 1);
+  });
+
+  // MUTATION: implementer treats `rating` as an opaque string. Unknown ratings
+  // would corrupt distillation flagging (AC-2 of TASK-016).
+  it('CHORE-004: reviews[0] `rating` outside enum ("meh") → malformed-row', () => {
+    const badReview = { ...makeReview({ id: 'R1', cardId: 'C1', pageId: 'P1' }), rating: 'meh' as unknown as 'easy' };
+    const result = parseExport(envWith({ reviews: [badReview] }));
+    expectMalformedRow(result, 'reviews', 1);
+  });
+
+  // MUTATION: implementer uses `typeof === 'number'` instead of Number.isFinite.
+  it('CHORE-004: reviews[0] `reviewedAt` is NaN → malformed-row', () => {
+    const badReview = { ...makeReview({ id: 'R1', cardId: 'C1', pageId: 'P1' }), reviewedAt: NaN };
+    const result = parseExport(envWith({ reviews: [badReview] }));
+    // AC-8 mutation trap: typeof === 'number' would let NaN through; Number.isFinite catches it.
+    expectMalformedRow(result, 'reviews', 1);
+  });
+});
+
+describe('CHORE-004 AC-3: index reporting is 1-based and per-table', () => {
+  // MUTATION: implementer uses 0-based index OR reports the absolute index
+  // across all four tables. Both are wrong. This test fixes the table-local
+  // 1-based contract for the UI copy.
+  it('CHORE-004: malformed pages[2] reports index=3 (1-based, per-table), not 1 or 5', () => {
+    const ok1 = makePage({ id: 'P-ok-1', bookId: 'B1' });
+    const ok2 = makePage({ id: 'P-ok-2', bookId: 'B1' });
+    const badPage = { ...makePage({ id: 'P-bad', bookId: 'B1' }), tier: 'platinum' as unknown as 'bronze' };
+    const result = parseExport(envWith({
+      books: [makeBook({ id: 'B1' })], // upstream table; if absolute, index would shift
+      pages: [ok1, ok2, badPage],
+    }));
+    expectMalformedRow(result, 'pages', 3);
+  });
+});
+
+describe('CHORE-004 AC-4: id-character reject', () => {
+  // MUTATION: implementer forgets id sanitisation. A "#"-bearing id breaks the
+  // HashRouter (Page.id "p#1" → /list/p#1 → router truncates at the hash).
+  it('CHORE-004: books[0].id containing "#" → malformed-row table=books', () => {
+    const badBook = makeBook({ id: 'B#1' });
+    const result = parseExport(envWith({ books: [badBook] }));
+    expectMalformedRow(result, 'books', 1);
+  });
+
+  // MUTATION: implementer only rejects "#" but forgets "?" — query string would
+  // truncate the URL path component.
+  it('CHORE-004: pages[0].id containing "?" → malformed-row table=pages', () => {
+    const badPage = makePage({ id: 'P?1', bookId: 'B1' });
+    const result = parseExport(envWith({
+      books: [makeBook({ id: 'B1' })],
+      pages: [badPage],
+    }));
+    expectMalformedRow(result, 'pages', 1);
+  });
+
+  // MUTATION: implementer rejects "#" and "?" but allows "/" — a slash in an
+  // id breaks route parsing because HashRouter splits on "/".
+  it('CHORE-004: cards[0].id containing "/" → malformed-row table=cards', () => {
+    const badCard = makeCard({ id: 'C/1', bookId: 'B1', pageId: 'P1' });
+    const result = parseExport(envWith({ cards: [badCard] }));
+    expectMalformedRow(result, 'cards', 1);
+  });
+});
+
+describe('CHORE-004 AC-2: per-table allowlist strips unknown keys before write', () => {
+  beforeEach(async () => {
+    if (db.isOpen()) db.close();
+    await db.delete();
+    await db.open();
+  });
+  afterEach(async () => {
+    if (db.isOpen()) db.close();
+  });
+
+  // MUTATION: implementer uses `JSON.parse` straight into Dexie without an
+  // allowlist sieve. `htmlNote` would land in IndexedDB; future reads expose
+  // attacker-controlled HTML to the React tree.
+  it('CHORE-004: books[0] with extra `htmlNote` → htmlNote NOT present on the row in Dexie after import', async () => {
+    const tainted: Record<string, unknown> = {
+      ...makeBook({ id: 'B-allow' }),
+      htmlNote: '<script>alert(1)</script>',
+    };
+    const parsed = parseExport(envWith({ books: [tainted] }));
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) throw new Error('parse failed; expected the row to be valid after allowlist sieve');
+    await runImportTransaction(parsed.envelope);
+    const row = (await books.get('B-allow')) as unknown as Record<string, unknown> | undefined;
+    expect(row).toBeDefined();
+    if (row === undefined) return;
+    expect(Object.hasOwn(row, 'htmlNote')).toBe(false);
+    // Sanity: a legitimate field survived — proves the strip didn't nuke the row.
+    expect(row['name']).toBe('Japanese');
+  });
+
+  // MUTATION: implementer iterates `for (const k in row)` without a hasOwn
+  // guard, OR uses `row.__proto__` to detect — `__proto__` would resolve via
+  // the chain and the test would be vacuously true. Object.hasOwn is the
+  // only correct check.
+  it('CHORE-004: books[0] with explicit `__proto__` key → stripped (Object.hasOwn returns false post-import)', async () => {
+    const tainted = JSON.parse(JSON.stringify({
+      ...makeBook({ id: 'B-proto' }),
+    })) as Record<string, unknown>;
+    // Use defineProperty so __proto__ becomes an OWN property (assignment via
+    // `tainted.__proto__ =` would set the prototype, not an own key).
+    Object.defineProperty(tainted, '__proto__', {
+      value: { polluted: true },
+      enumerable: true,
+      writable: true,
+      configurable: true,
+    });
+    const parsed = parseExport(envWith({ books: [tainted] }));
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) throw new Error('parse failed; expected the row to be valid after allowlist sieve');
+    await runImportTransaction(parsed.envelope);
+    const row = (await books.get('B-proto')) as unknown as Record<string, unknown> | undefined;
+    expect(row).toBeDefined();
+    if (row === undefined) return;
+    // NOTE: Object.hasOwn — NOT row.__proto__ which would resolve via prototype chain.
+    expect(Object.hasOwn(row, '__proto__')).toBe(false);
+    expect(row['name']).toBe('Japanese');
+  });
+});
+
+describe('CHORE-004 AC-6: round-trip preserves realistic envelopes', () => {
+  beforeEach(async () => {
+    if (db.isOpen()) db.close();
+    await db.delete();
+    await db.open();
+  });
+  afterEach(async () => {
+    if (db.isOpen()) db.close();
+  });
+
+  // MUTATION: implementer's new per-row validator over-rejects legitimate
+  // optional-field combinations (Gold with reviewableAt:null, parentIds on
+  // distilled cards, archivedAt on a card). This test catches false positives
+  // — if the validator is too strict, the round-trip fails.
+  it('CHORE-004: realistic envelope (1 book, 2 pages incl. Gold null, 2 cards, 2 reviews) round-trips deep-equal', () => {
+    const book = makeBook({ id: 'B-A' });
+    const bronze = makePage({ id: 'P-BRZ', bookId: 'B-A', tier: 'bronze', cardIds: ['C1', 'C2'] });
+    const gold = makePage({
+      id: 'P-GLD', bookId: 'B-A', tier: 'gold',
+      reviewableAt: null, cardIds: ['C2'], parentPageId: 'P-BRZ',
+    });
+    const c1 = makeCard({ id: 'C1', bookId: 'B-A', pageId: 'P-BRZ' });
+    const c2 = makeCard({
+      id: 'C2', bookId: 'B-A', pageId: 'P-GLD',
+      parentIds: ['C1'], archivedAt: 1_750_000_000_000,
+    });
+    const r1 = makeReview({ id: 'R1', cardId: 'C1', pageId: 'P-BRZ', rating: 'wrong' });
+    const r2 = makeReview({ id: 'R2', cardId: 'C2', pageId: 'P-GLD', rating: 'easy' });
+
+    const env = buildExportEnvelope({
+      books: [book], pages: [bronze, gold], cards: [c1, c2], reviews: [r1, r2],
+      exportedAt: 1_700_000_000_000,
+    });
+    const result = parseExport(JSON.parse(JSON.stringify(env)));
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error('parse failed; round-trip rejected valid data');
+    expect(result.envelope).toEqual(env);
+    // Explicit Gold sacred-rule check: reviewableAt:null must survive (not 0, not undefined).
+    expect(result.envelope.pages[1]?.reviewableAt).toBeNull();
+  });
+});
+
 // --- Source-purity scan: exportImport.ts is pure per ADR-017 ---------------
 
 describe('TASK-018: exportImport.ts is pure (no Dexie / React / Date.now / window)', () => {

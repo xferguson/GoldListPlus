@@ -39,6 +39,7 @@ src/
 │   ├── time.ts                  # pure date math helpers
 │   ├── sync/
 │   │   ├── exportImport.ts      # pure: buildExportEnvelope, formatExportFilename, parseExport, validateForeignKeys
+│   │   ├── exportImportValidators.ts # pure: per-row schema validators (books/pages/cards/reviews) — file-private to exportImport.ts
 │   │   └── fileHandle.ts        # File System Access pinned-file
 │   └── notifications.ts         # permission, on-open notifier, TimestampTrigger feature-detect
 ├── stores/

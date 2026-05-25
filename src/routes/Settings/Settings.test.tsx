@@ -355,6 +355,165 @@ describe('TASK-018 AC-13: parse / validation failures render locked copy with no
   );
 });
 
+// --- CHORE-004 AC-7: malformed-row UI surface ------------------------------
+
+describe('CHORE-004 AC-7: malformed-row import surfaces locked copy, no modal, no DB writes', () => {
+  // MUTATION: implementer hooks the new `malformed-row` kind into a generic
+  // "Import failed." catch-all instead of the per-table user copy. The exact
+  // textContent assertion below pins the PRD §5.10 wording.
+  it('CHORE-004: malformed books[2] (missing name) → sync-error reads exact PRD copy, no confirm modal, DB untouched', async () => {
+    renderAtSettings();
+
+    // Two valid books then a third missing `name` — 1-based index = 3.
+    const goodA = makeBook({ id: 'B-A', name: 'Japanese' });
+    const goodB = makeBook({ id: 'B-B', name: 'French' });
+    const badC: Record<string, unknown> = {
+      id: 'B-C',
+      // name: deliberately omitted
+      sourceLang: 'en', targetLang: 'de',
+      settings: { ...DEFAULT_SETTINGS }, createdAt: 1_700_000_000_000,
+    };
+    const malformedFile = JSON.stringify({
+      version: 1, exportedAt: 1_700_000_000_000,
+      books: [goodA, goodB, badC],
+      pages: [], cards: [], reviews: [],
+    });
+
+    pickFile(malformedFile);
+
+    const errEl = await screen.findByTestId('sync-error');
+    expect(errEl.textContent).toBe(
+      'This backup has a malformed book at row 3. Nothing was imported.',
+    );
+    expect(errEl.getAttribute('role')).toBe('alert');
+    // No confirm modal — validation aborts before the user sees the dialog.
+    expect(screen.queryByRole('dialog', { name: /confirm import/i })).not.toBeInTheDocument();
+    // DB unchanged (mirror the FK-error pattern at line 150-153).
+    expect(await db.books.toArray()).toEqual([]);
+    expect(await db.pages.toArray()).toEqual([]);
+    expect(await db.cards.toArray()).toEqual([]);
+    expect(await db.reviews.toArray()).toEqual([]);
+  });
+
+  // MUTATION: implementer wires the table label into the wrong slot — e.g.
+  // shows "malformed book" for every table. The matrix locks the per-table
+  // copy so a single typo fails one row, not all four.
+  it.each<[string, string, string]>([
+    [
+      'pages → "malformed list"',
+      JSON.stringify({
+        version: 1, exportedAt: 1_700_000_000_000,
+        books: [], pages: [{
+          id: 'P1', title: 'orphan', tier: 'bronze',
+          createdAt: 1, reviewableAt: 1, cardIds: [],
+          // bookId deliberately omitted
+        }], cards: [], reviews: [],
+      }),
+      'This backup has a malformed list at row 1. Nothing was imported.',
+    ],
+    [
+      'cards → "malformed card"',
+      JSON.stringify({
+        version: 1, exportedAt: 1_700_000_000_000,
+        books: [], pages: [], cards: [{
+          id: 'C1', bookId: 'B1',
+          // pageId deliberately omitted
+          source: 'hola', target: 'hello', createdAt: 1,
+        }], reviews: [],
+      }),
+      'This backup has a malformed card at row 1. Nothing was imported.',
+    ],
+    [
+      'reviews → "malformed review"',
+      JSON.stringify({
+        version: 1, exportedAt: 1_700_000_000_000,
+        books: [], pages: [], cards: [], reviews: [{
+          id: 'R1', pageId: 'P1', rating: 'easy', reviewedAt: 1,
+          // cardId deliberately omitted
+        }],
+      }),
+      'This backup has a malformed review at row 1. Nothing was imported.',
+    ],
+  ])('CHORE-004: %s renders exact PRD copy', async (_label, content, expectedCopy) => {
+    renderAtSettings();
+    pickFile(content);
+
+    const errEl = await screen.findByTestId('sync-error');
+    expect(errEl.textContent).toBe(expectedCopy);
+    expect(screen.queryByRole('dialog', { name: /confirm import/i })).not.toBeInTheDocument();
+    expect(await db.books.toArray()).toEqual([]);
+    expect(await db.pages.toArray()).toEqual([]);
+    expect(await db.cards.toArray()).toEqual([]);
+    expect(await db.reviews.toArray()).toEqual([]);
+  });
+
+  // CHORE-004 review-kickback Finding B (observability MAJOR): the developer-
+  // facing `reason` from the new `malformed-row` ImportError variant is dropped
+  // on the floor — errorCopy only consumes {kind, table, index}. PRD §5.10
+  // names reason as developer-facing, which here means console-visible.
+  // MUTATION: dropping reason from the console.warn payload would let the test
+  // pass with only {table, index}; expect.objectContaining({reason: expect.any(String)})
+  // catches it.
+  it('CHORE-004 Finding B: malformed-row → console.warn called with structured {table, index, reason} diagnostic', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      renderAtSettings();
+
+      // Mirror the AC-7 books fixture: two valid books then a third missing
+      // `name` — 1-based index = 3, table = 'books'.
+      const goodA = makeBook({ id: 'B-A', name: 'Japanese' });
+      const goodB = makeBook({ id: 'B-B', name: 'French' });
+      const badC: Record<string, unknown> = {
+        id: 'B-C',
+        // name: deliberately omitted
+        sourceLang: 'en', targetLang: 'de',
+        settings: { ...DEFAULT_SETTINGS }, createdAt: 1_700_000_000_000,
+      };
+      const malformedFile = JSON.stringify({
+        version: 1, exportedAt: 1_700_000_000_000,
+        books: [goodA, goodB, badC],
+        pages: [], cards: [], reviews: [],
+      });
+
+      pickFile(malformedFile);
+
+      // Wait for the user-visible error to settle before asserting on the
+      // console diagnostic — the warn happens in the same handler so once the
+      // DOM has the error text, the warn must already have fired.
+      const errEl = await screen.findByTestId('sync-error');
+      expect(errEl.textContent).toBe(
+        'This backup has a malformed book at row 3. Nothing was imported.',
+      );
+
+      // Flexible assertion shape — accepts either `console.warn(string, obj)`
+      // or `console.warn(obj)` or any other arg arrangement. The contract is
+      // that *somewhere* in the call args, an object with the structured
+      // diagnostic appeared. This avoids pinning the log format.
+      expect(warnSpy).toHaveBeenCalled();
+      expect(warnSpy.mock.calls.flat()).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            table: 'books',
+            index: 3,
+            reason: expect.any(String),
+          }),
+        ]),
+      );
+
+      // Existing assertions from the suite still hold — confirm modal absent,
+      // DB unchanged.
+      expect(screen.queryByRole('dialog', { name: /confirm import/i }))
+        .not.toBeInTheDocument();
+      expect(await db.books.toArray()).toEqual([]);
+      expect(await db.pages.toArray()).toEqual([]);
+      expect(await db.cards.toArray()).toEqual([]);
+      expect(await db.reviews.toArray()).toEqual([]);
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+});
+
 // --- DOM contracts (section heading, helper copy, buttons, hidden input) ---
 
 describe('TASK-018: Settings route exposes the Backup & restore section', () => {

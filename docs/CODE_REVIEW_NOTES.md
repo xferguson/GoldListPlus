@@ -72,7 +72,27 @@ Lessons that apply across all future PRs, surfaced from individual review entrie
 
 > Newest first. Append, never edit historical entries — corrections go in a new entry referencing the old.
 
-### 2026-05-25 — baseline — `claude/gracious-knuth-665964` — first run of the 10-reviewer orchestrator against existing codebase
+### 2026-05-25 — PR #TBD — `worktree-GoldListPlus-CHORE-004` — CHORE-004 tightens `parseExport` to per-row schema validation
+
+**Scope:** CHORE-004 from the 2026-05-25 baseline. Adds a `malformed-row` `ImportError` variant to `src/lib/sync/exportImport.ts`, four per-table row validators with an allowlist sieve, and per-table user copy in `src/routes/Settings/index.tsx`. Closes the two reviewer-security MAJORs from the baseline run (per-row schema not validated; prototype-pollution-adjacent imports).
+**Verdict:** REQUEST_CHANGES → APPROVE after one kickback round. 5 commits total (PRD + Red + Green + kickback Red + kickback Green).
+**Specialists:** 7 APPROVE on first pass (complexity, modularity, readability, scope, responsibility, testability, generic). 3 REQUEST_CHANGES on first pass (security, observability, error-handling).
+
+**Findings (kickback round):**
+- [MAJOR] reviewer-security @ `src/lib/sync/exportImport.ts:126,167` — `Array.isArray(cardIds)` / `Array.isArray(parentIds)` validated container only; elements passed through as `string[]`. Allowed injection of `[123]`, `[null]`, `[{__proto__: {polluted: true}}]`, mixed-valid-bad. **Fixed in `780fb5d`** — both validators now require `.every((x) => isNonEmptyString(x))`. 11 new tests pin the rejection across 6 pages.cardIds × 5 cards.parentIds element-injection vectors.
+- [MAJOR] reviewer-observability @ `src/routes/Settings/index.tsx` `errorCopy` — chore's whole new developer-facing `reason` diagnostic was constructed and dropped. **Fixed in `780fb5d`** — `handleFileChange` now calls `console.warn('settings.import: malformed row', { table, index, reason })` before `setErrorText`. User-facing copy is unchanged. 1 new test asserts the structured warn payload.
+
+**Findings (deferred — pre-existing on `main`, outside chore lane):**
+- [MAJOR] reviewer-error-handling @ `src/routes/Settings/index.tsx:123` — `await readFileText(file)` not in try/catch; FileReader rejection becomes unhandled promise.
+- [MAJOR] reviewer-observability + reviewer-error-handling @ `src/routes/Settings/index.tsx:103,158` — bare `catch {}` swallows `Error` on both export and import paths; user sees opaque "Export failed." / "Import failed." with nothing in DevTools console.
+- Recommend tech-lead spawn a follow-up chore (CHORE-009 candidate) scoped to Settings error-boundary hardening.
+
+**Precedent / lesson:**
+The chore's targeted MAJORs (per-row schema, prototype-pollution-adjacent) closed cleanly, but the panel surfaced an adjacent class of findings the implementer hadn't pre-empted: **array element validation must be element-wise, not container-only.** `Array.isArray(x)` proves "x is an array" — it does NOT prove "x's elements satisfy the typed contract the rest of the codebase relies on." This applies wherever an untrusted boundary (file import, IndexedDB read, URL param) yields a `T[]`-typed value: validate the elements, not just the array-ness. Candidate for `P-005` if it appears in one more PR. Also: when a chore introduces a new diagnostic field, the chore is unfinished until the field is reachable by a developer — "developer-facing" without console output is dead code.
+
+**Waivers:** none. The 3 pre-existing MAJORs are *deferred* (file follow-up chore), not waived.
+
+
 
 **Scope:** Baseline review of the whole codebase at HEAD `be0c896` (no PR diff). First exercise of the 10-specialist orchestrator + consolidator pipeline introduced in PR #14. All ten reviewers fired in parallel against the entire `src/` tree (~53 production files, ~3490 LOC non-test) and `docs/`.
 **Verdict:** REQUEST_CHANGES (consolidated). The full consolidated report lives in the conversation transcript that produced this run; copying it verbatim would exceed the archive's signal/noise budget.

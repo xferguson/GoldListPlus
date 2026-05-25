@@ -1,4 +1,14 @@
 import type { Book, Card, Page, ReviewEvent } from '../../db/db';
+import {
+  validateBookRow,
+  validateCardRow,
+  validatePageRow,
+  validateReviewRow,
+  validateTable,
+} from './exportImportValidators';
+import type { MalformedRowTable } from './exportImportValidators';
+
+export type { MalformedRowTable };
 
 export type ExportEnvelope = {
   version: 1;
@@ -12,7 +22,8 @@ export type ExportEnvelope = {
 export type ImportError =
   | { kind: 'invalid-json' }
   | { kind: 'not-a-backup' }
-  | { kind: 'newer-version'; version: number };
+  | { kind: 'newer-version'; version: number }
+  | { kind: 'malformed-row'; table: MalformedRowTable; index: number; reason: string };
 
 export type ParseResult =
   | { ok: true; envelope: ExportEnvelope }
@@ -73,7 +84,25 @@ export function parseExport(input: unknown): ParseResult {
   ) {
     return { ok: false, error: { kind: 'not-a-backup' } };
   }
-  return { ok: true, envelope: input as unknown as ExportEnvelope };
+
+  const booksResult = validateTable(obj.books, 'books', validateBookRow);
+  if (!booksResult.ok) return { ok: false, error: booksResult.error };
+  const pagesResult = validateTable(obj.pages, 'pages', validatePageRow);
+  if (!pagesResult.ok) return { ok: false, error: pagesResult.error };
+  const cardsResult = validateTable(obj.cards, 'cards', validateCardRow);
+  if (!cardsResult.ok) return { ok: false, error: cardsResult.error };
+  const reviewsResult = validateTable(obj.reviews, 'reviews', validateReviewRow);
+  if (!reviewsResult.ok) return { ok: false, error: reviewsResult.error };
+
+  const envelope: ExportEnvelope = {
+    version: 1,
+    exportedAt: obj.exportedAt,
+    books: booksResult.rows,
+    pages: pagesResult.rows,
+    cards: cardsResult.rows,
+    reviews: reviewsResult.rows,
+  };
+  return { ok: true, envelope };
 }
 
 export function validateForeignKeys(

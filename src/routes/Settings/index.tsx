@@ -20,6 +20,13 @@ const HELPER_COPY =
 
 type AnyImportError = ImportError | { kind: 'fk-missing' };
 
+const MALFORMED_ROW_NOUNS: Record<'books' | 'pages' | 'cards' | 'reviews', string> = {
+  books: 'book',
+  pages: 'list',
+  cards: 'card',
+  reviews: 'review',
+};
+
 function errorCopy(error: AnyImportError): string {
   switch (error.kind) {
     case 'invalid-json':
@@ -28,6 +35,10 @@ function errorCopy(error: AnyImportError): string {
       return "That file isn't a Gold List Plus backup.";
     case 'newer-version':
       return 'This backup was made by a newer version of Gold List Plus. Update the app and try again.';
+    case 'malformed-row': {
+      const noun = MALFORMED_ROW_NOUNS[error.table];
+      return `This backup has a malformed ${noun} at row ${error.index}. Nothing was imported.`;
+    }
     case 'fk-missing':
       return "This backup is missing data it depends on (e.g. a list whose book isn't included). Nothing was imported.";
   }
@@ -120,6 +131,13 @@ export function Settings() {
 
     const parseResult = parseExport(parsedJson);
     if (!parseResult.ok) {
+      if (parseResult.error.kind === 'malformed-row') {
+        console.warn('settings.import: malformed row', {
+          table: parseResult.error.table,
+          index: parseResult.error.index,
+          reason: parseResult.error.reason,
+        });
+      }
       setErrorText(errorCopy(parseResult.error));
       return;
     }
