@@ -7,6 +7,7 @@ import { tierVisual } from '../../lib/tiers';
 import type { Card, Page } from '../../db/db';
 import * as pages from '../../db/repos/pages';
 import * as cards from '../../db/repos/cards';
+import { MS_PER_DAY } from '../../lib/time';
 
 // Source-level scan target for AC-16 (no localStorage / sessionStorage).
 const LISTDETAIL_SOURCE_MODULES = import.meta.glob('./index.tsx', {
@@ -71,7 +72,7 @@ function makePage(overrides: Partial<Page> = {}): Page {
     title: 'Bronze 1',
     tier: 'bronze',
     createdAt: 1_700_000_000_000,
-    reviewableAt: 1_700_000_000_000 + 14 * 86_400_000,
+    reviewableAt: 1_700_000_000_000 + 14 * MS_PER_DAY,
     cardIds: [],
     ...overrides,
   };

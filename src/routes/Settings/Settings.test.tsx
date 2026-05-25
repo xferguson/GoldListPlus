@@ -15,6 +15,7 @@ import * as books from '../../db/repos/books';
 import * as pages from '../../db/repos/pages';
 import * as cards from '../../db/repos/cards';
 import * as reviews from '../../db/repos/reviews';
+import { MS_PER_DAY } from '../../lib/time';
 
 // --- Fixtures ---------------------------------------------------------------
 
@@ -29,7 +30,7 @@ const makeBook = (o: Partial<Book> = {}): Book => ({
 const makePage = (o: Partial<Page> = {}): Page => ({
   id: ulid(), bookId: ulid(), title: 'Bronze 1', tier: 'bronze',
   createdAt: 1_700_000_000_000,
-  reviewableAt: 1_700_000_000_000 + 14 * 86_400_000, cardIds: [], ...o,
+  reviewableAt: 1_700_000_000_000 + 14 * MS_PER_DAY, cardIds: [], ...o,
 });
 const makeCard = (o: Partial<Card> = {}): Card => ({
   id: ulid(), bookId: ulid(), pageId: ulid(),
