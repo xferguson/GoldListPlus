@@ -50,18 +50,16 @@ export function ListDetail() {
 
   async function onAddSuccess(newCard: Card): Promise<void> {
     if (page === undefined) return;
-    await cards.create(newCard);
+    await cards.appendToPage(page.id, newCard);
     const nextCardIds = [...page.cardIds, newCard.id];
-    await pages.update(page.id, { cardIds: nextCardIds });
     setPage({ ...page, cardIds: nextCardIds });
     setCardList((prev) => [...prev, newCard]);
   }
 
   async function onDelete(cardId: string): Promise<void> {
     if (page === undefined) return;
-    await cards.remove(cardId);
+    await cards.detachFromPage(page.id, cardId);
     const nextCardIds = page.cardIds.filter((id) => id !== cardId);
-    await pages.update(page.id, { cardIds: nextCardIds });
     setPage({ ...page, cardIds: nextCardIds });
     setCardList((prev) => prev.filter((c) => c.id !== cardId));
   }

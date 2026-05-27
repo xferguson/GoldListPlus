@@ -27,6 +27,36 @@ export async function remove(id: string): Promise<void> {
   });
 }
 
+export async function appendToPage(pageId: string, card: Card): Promise<void> {
+  await db.transaction('rw', [db.pages, db.cards], async () => {
+    const page = await db.pages.get(pageId);
+    if (page === undefined) {
+      throw new Error(`Page ${pageId} not found.`);
+    }
+    if (page.reviewedAt !== undefined) {
+      throw new Error(`Page ${pageId} is locked: it has been reviewed.`);
+    }
+    await db.cards.add(card);
+    await db.pages.update(pageId, { cardIds: [...page.cardIds, card.id] });
+  });
+}
+
+export async function detachFromPage(pageId: string, cardId: string): Promise<void> {
+  await db.transaction('rw', [db.pages, db.cards], async () => {
+    const page = await db.pages.get(pageId);
+    if (page === undefined) {
+      throw new Error(`Page ${pageId} not found.`);
+    }
+    if (page.reviewedAt !== undefined) {
+      throw new Error(`Page ${pageId} is locked: it has been reviewed.`);
+    }
+    await db.cards.delete(cardId);
+    await db.pages.update(pageId, {
+      cardIds: page.cardIds.filter((id) => id !== cardId),
+    });
+  });
+}
+
 async function assertPageUnlocked(cardId: string): Promise<void> {
   const card = await db.cards.get(cardId);
   if (card === undefined) {
