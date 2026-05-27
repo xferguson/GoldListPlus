@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { render, screen, within, waitFor, waitForElementToBeRemoved } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Routes, Route } from 'react-router-dom';
@@ -32,6 +32,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   if (db.isOpen()) {
     db.close();
   }
@@ -583,5 +584,104 @@ describe('TASK-011 AC-17: ListDetail headlist warning — delete + re-add', () =
       </MemoryRouter>,
     );
     expect(await second.findByTestId('headlist-warning')).toBeInTheDocument();
+  });
+});
+
+// =============================================================================
+// CHORE-005 — Route-layer rollback when underlying Dexie write rejects mid-tx
+// =============================================================================
+//
+// AC-3 (TASKS.md): ListDetail.onAddSuccess calls cards.appendToPage; onDelete
+// calls cards.detachFromPage. The legacy `cards.create` + `pages.update` two-
+// step is removed.
+// AC-5 (TASKS.md): Failure-mode test (route layer): seed Page with one Card;
+// click Add; underlying db.pages.update rejects mid-tx; DB state is unchanged.
+//
+// Error UI is OUT OF SCOPE for CHORE-005 (owned by CHORE-002's catch-binding);
+// this suite only asserts the DB rollback and that the route is still mounted.
+// =============================================================================
+
+describe('CHORE-005 AC-3/AC-5: ListDetail uses the atomic appendToPage repo function', () => {
+  it('CHORE-005 AC-5: when db.pages.update rejects on Add, no Card row is persisted (rollback) — kills non-atomic onAddSuccess', async () => {
+    const user = userEvent.setup();
+    await seed(makePage({ id: 'p1', bookId: 'b1', cardIds: [] }));
+    renderListDetail('p1');
+    await screen.findByTestId('add-card-form');
+
+    // Spy at the Dexie layer (NewBook.test.tsx:449 precedent) so the real
+    // route + real repo run, and only the underlying table call rejects.
+    vi.spyOn(db.pages, 'update').mockRejectedValueOnce(new Error('boom'));
+
+    await addOneCard(user, 'rollback-src', 'rollback-tgt');
+
+    await waitFor(async () => {
+      const persisted = await cards.listByPage('p1');
+      // kills: a non-atomic onAddSuccess that calls cards.create before
+      // pages.update — the card would survive even though pages.update rejected.
+      expect(
+        persisted.find(
+          (c) => c.source === 'rollback-src' && c.target === 'rollback-tgt',
+        ),
+      ).toBeUndefined();
+    });
+
+    // Page.cardIds did not include the new id.
+    const after = await pages.get('p1');
+    expect(after).toBeDefined();
+    expect(after!.cardIds).toEqual([]);
+
+    // Route did not crash — the form is still mounted.
+    expect(screen.getByTestId('add-card-form')).toBeInTheDocument();
+  });
+
+  it('CHORE-005 AC-5: when db.pages.update rejects on Add to a non-empty page, the prior cardIds are preserved (rollback)', async () => {
+    const user = userEvent.setup();
+    await seed(makePage({ id: 'p1', bookId: 'b1' }), [makeCard({ id: 'pre-existing', source: 'old', target: 'viejo' })]);
+    renderListDetail('p1');
+    await screen.findByTestId('card-row-pre-existing');
+
+    vi.spyOn(db.pages, 'update').mockRejectedValueOnce(new Error('boom'));
+
+    await addOneCard(user, 'new-src', 'new-tgt');
+
+    await waitFor(async () => {
+      const persisted = await cards.listByPage('p1');
+      // kills: non-atomic add — the new card would survive on disk.
+      expect(persisted.find((c) => c.source === 'new-src')).toBeUndefined();
+    });
+
+    // The pre-existing card and its id in cardIds are preserved.
+    expect(await cards.get('pre-existing')).toBeDefined();
+    const after = await pages.get('p1');
+    expect(after).toBeDefined();
+    expect(after!.cardIds).toEqual(['pre-existing']);
+  });
+
+  it('CHORE-005 AC-5: when db.pages.update rejects on Delete, the Card row is NOT deleted (rollback) — kills non-atomic onDelete', async () => {
+    const user = userEvent.setup();
+    await seed(makePage({ id: 'p1', bookId: 'b1' }), [
+      makeCard({ id: 'keep-me', source: 'one', target: 'uno' }),
+      makeCard({ id: 'try-delete', source: 'two', target: 'dos' }),
+    ]);
+    renderListDetail('p1');
+    await screen.findByTestId('card-row-try-delete');
+
+    vi.spyOn(db.pages, 'update').mockRejectedValueOnce(new Error('boom'));
+
+    await user.click(screen.getByTestId('card-delete-try-delete'));
+
+    await waitFor(async () => {
+      // kills: non-atomic onDelete (cards.remove then pages.update) — the card
+      // would be gone even though pages.update rejected.
+      expect(await cards.get('try-delete')).toBeDefined();
+    });
+
+    // Page.cardIds preserved entirely.
+    const after = await pages.get('p1');
+    expect(after).toBeDefined();
+    expect(after!.cardIds).toEqual(['keep-me', 'try-delete']);
+
+    // Route still mounted.
+    expect(screen.getByTestId('route-list-detail')).toBeInTheDocument();
   });
 });
